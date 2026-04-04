@@ -1,0 +1,51 @@
+name: Test mcpx Action
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  test-lint:
+    name: Lint MCP Server
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Lint DeepWiki (expect pass — fail-on errors)
+        id: lint
+        uses: sameenchand/mcpx@v1
+        with:
+          url: https://mcp.deepwiki.com/mcp
+          fail-on: errors
+
+      - name: Print outputs
+        run: |
+          echo "Grade  : ${{ steps.lint.outputs.grade }}"
+          echo "Score  : ${{ steps.lint.outputs.score }}"
+          echo "Errors : ${{ steps.lint.outputs.errors }}"
+          echo "Warnings: ${{ steps.lint.outputs.warnings }}"
+
+  test-min-grade:
+    name: Min Grade Gate (B)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Lint with min-grade B (DeepWiki is B — expect pass)
+        uses: sameenchand/mcpx@v1
+        with:
+          url: https://mcp.deepwiki.com/mcp
+          min-grade: B
+
+  test-token-budget:
+    name: Token Budget Gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Lint with token-budget 5000 (263 tokens — expect pass)
+        uses: sameenchand/mcpx@v1
+        with:
+          url: https://mcp.deepwiki.com/mcp
+          token-budget: 5000
