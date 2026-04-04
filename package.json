@@ -1,8 +1,30 @@
 {
   "name": "@samsec/mcpx",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "CLI for linting and inspecting MCP servers. Powered by MCP Playground.",
   "license": "MIT",
+  "homepage": "https://github.com/sameenchand/mcpx#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sameenchand/mcpx.git"
+  },
+  "bugs": {
+    "url": "https://github.com/sameenchand/mcpx/issues"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "cli",
+    "lint",
+    "linter",
+    "inspector",
+    "ai",
+    "llm",
+    "tools",
+    "schema",
+    "quality",
+    "ci"
+  ],
   "bin": {
     "mcpx": "dist/index.js"
   },
@@ -10,7 +32,9 @@
     "node": ">=18"
   },
   "files": [
-    "dist"
+    "dist",
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
     "build": "tsup",
