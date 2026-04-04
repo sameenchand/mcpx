@@ -32,34 +32,40 @@ export async function runLint(url: string, opts: LintOptions): Promise<void> {
 
   spinner?.stop();
 
+  // Compute token budget failure before rendering anything
+  const tokenBudgetExceeded =
+    opts.tokenBudget !== undefined && result.tokenEstimate.total > opts.tokenBudget
+      ? { actual: result.tokenEstimate.total, budget: opts.tokenBudget }
+      : undefined;
+
   if (opts.format === "json") {
     console.log(JSON.stringify(result, null, 2));
-    process.exit(shouldFail(result.grade, result.summary, opts) ? EXIT.FAIL : EXIT.PASS);
+    process.exit(
+      shouldFail(result.grade, result.summary, opts, tokenBudgetExceeded)
+        ? EXIT.FAIL
+        : EXIT.PASS
+    );
   }
 
   if (!opts.quiet) {
-    printLint(result, opts.failOn, opts.minGrade);
+    printLint(result, opts.failOn, opts.minGrade, tokenBudgetExceeded);
   }
 
-  if (opts.tokenBudget && result.tokenEstimate.total > opts.tokenBudget) {
-    if (!opts.quiet) {
-      console.error(
-        chalk.red(
-          `  Token budget exceeded: ${result.tokenEstimate.total.toLocaleString()} > ${opts.tokenBudget.toLocaleString()}`
-        )
-      );
-    }
-    process.exit(EXIT.FAIL);
-  }
-
-  process.exit(shouldFail(result.grade, result.summary, opts) ? EXIT.FAIL : EXIT.PASS);
+  process.exit(
+    shouldFail(result.grade, result.summary, opts, tokenBudgetExceeded)
+      ? EXIT.FAIL
+      : EXIT.PASS
+  );
 }
 
 function shouldFail(
   grade: string,
   summary: { errors: number; warnings: number },
-  opts: LintOptions
+  opts: LintOptions,
+  tokenBudgetExceeded?: { actual: number; budget: number }
 ): boolean {
+  if (tokenBudgetExceeded) return true;
+
   if (opts.minGrade) {
     const actual = GRADE_ORDER.indexOf(grade);
     const minimum = GRADE_ORDER.indexOf(opts.minGrade);

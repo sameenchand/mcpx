@@ -13,7 +13,12 @@ function gradeColor(grade: string): string {
 
 const GRADE_ORDER = ["F", "D", "C", "B", "A"];
 
-export function printLint(result: LintResult, failOn: "errors" | "warnings" = "errors", minGrade?: string): void {
+export function printLint(
+  result: LintResult,
+  failOn: "errors" | "warnings" = "errors",
+  minGrade?: string,
+  tokenBudgetExceeded?: { actual: number; budget: number }
+): void {
   console.log();
   console.log(chalk.bold("  MCP Playground — Schema Linter"));
   console.log("  " + DIVIDER);
@@ -75,13 +80,19 @@ export function printLint(result: LintResult, failOn: "errors" | "warnings" = "e
     minGrade !== undefined &&
     GRADE_ORDER.indexOf(result.grade) < GRADE_ORDER.indexOf(minGrade);
 
-  const ciPassed =
-    !gradeFailed &&
-    (failOn === "warnings"
-      ? errCount === 0 && warnCount === 0
-      : errCount === 0);
+  const issueFailed =
+    failOn === "warnings"
+      ? errCount > 0 || warnCount > 0
+      : errCount > 0;
 
-  if (gradeFailed && !ciPassed) {
+  const ciPassed = !tokenBudgetExceeded && !gradeFailed && !issueFailed;
+
+  if (tokenBudgetExceeded) {
+    const parts = [`token budget exceeded: ${tokenBudgetExceeded.actual.toLocaleString()} > ${tokenBudgetExceeded.budget.toLocaleString()}`];
+    if (errCount > 0) parts.push(`${errCount} error${errCount > 1 ? "s" : ""}`);
+    if (warnCount > 0) parts.push(`${warnCount} warning${warnCount > 1 ? "s" : ""}`);
+    console.log(chalk.red.bold(`  ✖ Failed (${parts.join(", ")})`));
+  } else if (gradeFailed) {
     const parts = [];
     if (errCount > 0) parts.push(`${errCount} error${errCount > 1 ? "s" : ""}`);
     if (warnCount > 0) parts.push(`${warnCount} warning${warnCount > 1 ? "s" : ""}`);
@@ -90,15 +101,13 @@ export function printLint(result: LintResult, failOn: "errors" | "warnings" = "e
   } else if (ciPassed) {
     const parts = [];
     if (errCount > 0) parts.push(`${errCount} error${errCount > 1 ? "s" : ""}`);
-    if (warnCount > 0)
-      parts.push(`${warnCount} warning${warnCount > 1 ? "s" : ""}`);
+    if (warnCount > 0) parts.push(`${warnCount} warning${warnCount > 1 ? "s" : ""}`);
     const suffix = parts.length > 0 ? ` (${parts.join(", ")})` : "";
     console.log(chalk.green.bold(`  ✔ Passed${suffix}`));
   } else {
     const parts = [];
     if (errCount > 0) parts.push(`${errCount} error${errCount > 1 ? "s" : ""}`);
-    if (warnCount > 0)
-      parts.push(`${warnCount} warning${warnCount > 1 ? "s" : ""}`);
+    if (warnCount > 0) parts.push(`${warnCount} warning${warnCount > 1 ? "s" : ""}`);
     console.log(chalk.red.bold(`  ✖ Failed (${parts.join(", ")})`));
   }
   console.log();
