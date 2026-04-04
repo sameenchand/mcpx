@@ -6,7 +6,6 @@ export default defineConfig([
     format: ["cjs", "esm"],
     dts: true,
     clean: true,
-    banner: { js: "#!/usr/bin/env node" },
   },
   {
     entry: { action: "src/action.ts" },
