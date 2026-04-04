@@ -12,7 +12,7 @@ interface LintOptions {
 }
 
 export async function runLint(url: string, opts: LintOptions): Promise<void> {
-  const spinner = opts.quiet ? null : ora("Linting server…").start();
+  const spinner = opts.quiet || opts.format === "json" ? null : ora("Linting server…").start();
 
   let result;
   try {
@@ -36,7 +36,7 @@ export async function runLint(url: string, opts: LintOptions): Promise<void> {
   }
 
   if (!opts.quiet) {
-    printLint(result);
+    printLint(result, opts.failOn);
   }
 
   if (opts.tokenBudget && result.tokenEstimate.total > opts.tokenBudget) {

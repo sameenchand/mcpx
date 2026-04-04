@@ -11,7 +11,7 @@ function gradeColor(grade: string): string {
   return chalk.red(grade);
 }
 
-export function printLint(result: LintResult): void {
+export function printLint(result: LintResult, failOn: "errors" | "warnings" = "errors"): void {
   console.log();
   console.log(chalk.bold("  MCP Playground — Schema Linter"));
   console.log("  " + DIVIDER);
@@ -68,8 +68,18 @@ export function printLint(result: LintResult): void {
   console.log("  " + DIVIDER);
 
   const { errors: errCount, warnings: warnCount } = result.summary;
-  if (errCount === 0 && warnCount === 0) {
-    console.log(chalk.green.bold("  ✔ Passed"));
+  const ciPassed =
+    failOn === "warnings"
+      ? errCount === 0 && warnCount === 0
+      : errCount === 0;
+
+  if (ciPassed) {
+    const parts = [];
+    if (errCount > 0) parts.push(`${errCount} error${errCount > 1 ? "s" : ""}`);
+    if (warnCount > 0)
+      parts.push(`${warnCount} warning${warnCount > 1 ? "s" : ""}`);
+    const suffix = parts.length > 0 ? ` (${parts.join(", ")})` : "";
+    console.log(chalk.green.bold(`  ✔ Passed${suffix}`));
   } else {
     const parts = [];
     if (errCount > 0) parts.push(`${errCount} error${errCount > 1 ? "s" : ""}`);
