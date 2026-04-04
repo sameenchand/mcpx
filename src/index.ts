@@ -20,6 +20,7 @@ program
     "Fail on: errors (default) or warnings",
     "errors"
   )
+  .option("--min-grade <grade>", "Fail if grade is below threshold (A, B, C, D, F)")
   .option("--token-budget <n>", "Fail if token footprint exceeds N", parseInt)
   .option("--format <fmt>", "Output format: json")
   .option("--quiet", "No output, just exit code")
@@ -28,8 +29,14 @@ program
       console.error(`error: --fail-on must be "errors" or "warnings", got "${opts.failOn}"`);
       process.exit(1);
     }
+    const validGrades = ["A", "B", "C", "D", "F"];
+    if (opts.minGrade && !validGrades.includes(opts.minGrade.toUpperCase())) {
+      console.error(`error: --min-grade must be one of A, B, C, D, F — got "${opts.minGrade}"`);
+      process.exit(1);
+    }
     runLint(url, {
       failOn: opts.failOn,
+      minGrade: opts.minGrade?.toUpperCase(),
       tokenBudget: opts.tokenBudget,
       format: opts.format,
       quiet: opts.quiet,
