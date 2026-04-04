@@ -1,0 +1,28 @@
+name: MCP Schema Lint
+description: Lint an MCP server schema and fail CI on quality regressions
+author: sameenchand
+
+inputs:
+  url:
+    description: MCP server URL to lint
+    required: true
+  fail-on:
+    description: "Fail on: errors (default) or warnings"
+    default: errors
+  token-budget:
+    description: Max allowed token footprint
+    required: false
+
+outputs:
+  grade:
+    description: Letter grade (A–F)
+  score:
+    description: Numeric score (0–100)
+  errors:
+    description: Number of errors found
+  warnings:
+    description: Number of warnings found
+
+runs:
+  using: node20
+  main: ../../../dist/action.js
