@@ -100,7 +100,9 @@ export function printInspect(result: InspectResult): void {
     for (const tool of result.tools) {
       console.log(chalk.cyan(`  • ${tool.name}`));
       if (tool.description) {
-        console.log(chalk.dim(`    ${tool.description}`));
+        // Trim description to first line only — full schema is in --format json
+        const firstLine = tool.description.split("\n")[0].trim();
+        console.log(chalk.dim(`    ${firstLine}`));
       }
     }
   }
@@ -109,7 +111,10 @@ export function printInspect(result: InspectResult): void {
     console.log(chalk.bold.magenta(`\n  Resources (${result.resources.length})`));
     for (const r of result.resources) {
       console.log(chalk.magenta(`  • ${r.name}`));
-      if (r.description) console.log(chalk.dim(`    ${r.description}`));
+      if (r.description) {
+        const firstLine = r.description.split("\n")[0].trim();
+        console.log(chalk.dim(`    ${firstLine}`));
+      }
     }
   }
 
@@ -117,7 +122,10 @@ export function printInspect(result: InspectResult): void {
     console.log(chalk.bold.blue(`\n  Prompts (${result.prompts.length})`));
     for (const p of result.prompts) {
       console.log(chalk.blue(`  • ${p.name}`));
-      if (p.description) console.log(chalk.dim(`    ${p.description}`));
+      if (p.description) {
+        const firstLine = p.description.split("\n")[0].trim();
+        console.log(chalk.dim(`    ${firstLine}`));
+      }
     }
   }
 

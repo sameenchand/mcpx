@@ -84,9 +84,9 @@ function printDiff({
   const scoreLine =
     scoreDiff > 0
       ? chalk.red(`  Score  : ${base.score} → ${head.score}  (−${scoreDiff})`)
-      : chalk.green(
-          `  Score  : ${base.score} → ${head.score}  (+${Math.abs(scoreDiff)})`
-        );
+      : scoreDiff < 0
+      ? chalk.green(`  Score  : ${base.score} → ${head.score}  (+${Math.abs(scoreDiff)})`)
+      : chalk.green(`  Score  : ${base.score} → ${head.score}  (no change)`);
   console.log(scoreLine);
 
   const tokenLine =

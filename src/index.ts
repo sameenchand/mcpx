@@ -24,6 +24,10 @@ program
   .option("--format <fmt>", "Output format: json")
   .option("--quiet", "No output, just exit code")
   .action((url: string, opts) => {
+    if (opts.failOn !== "errors" && opts.failOn !== "warnings") {
+      console.error(`error: --fail-on must be "errors" or "warnings", got "${opts.failOn}"`);
+      process.exit(1);
+    }
     runLint(url, {
       failOn: opts.failOn,
       tokenBudget: opts.tokenBudget,
