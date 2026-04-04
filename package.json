@@ -1,10 +1,10 @@
 {
-  "name": "mcpx",
+  "name": "@samsec/mcpx",
   "version": "0.1.0",
   "description": "CLI for linting and inspecting MCP servers. Powered by MCP Playground.",
   "license": "MIT",
   "bin": {
-    "mcpx": "./dist/index.js"
+    "mcpx": "dist/index.js"
   },
   "engines": {
     "node": ">=18"
