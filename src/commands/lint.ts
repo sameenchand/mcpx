@@ -31,7 +31,7 @@ export async function runLint(url: string, opts: LintOptions): Promise<void> {
 
   if (opts.format === "json") {
     console.log(JSON.stringify(result, null, 2));
-    const failed = shouldFail(result.totals, opts);
+    const failed = shouldFail(result.summary, opts);
     process.exit(failed ? EXIT.FAIL : EXIT.PASS);
   }
 
@@ -39,27 +39,27 @@ export async function runLint(url: string, opts: LintOptions): Promise<void> {
     printLint(result);
   }
 
-  if (opts.tokenBudget && result.tokenEstimate > opts.tokenBudget) {
+  if (opts.tokenBudget && result.tokenEstimate.total > opts.tokenBudget) {
     if (!opts.quiet) {
       console.error(
         chalk.red(
-          `  Token budget exceeded: ${result.tokenEstimate.toLocaleString()} > ${opts.tokenBudget.toLocaleString()}`
+          `  Token budget exceeded: ${result.tokenEstimate.total.toLocaleString()} > ${opts.tokenBudget.toLocaleString()}`
         )
       );
     }
     process.exit(EXIT.FAIL);
   }
 
-  const failed = shouldFail(result.totals, opts);
+  const failed = shouldFail(result.summary, opts);
   process.exit(failed ? EXIT.FAIL : EXIT.PASS);
 }
 
 function shouldFail(
-  totals: { errors: number; warnings: number },
+  summary: { errors: number; warnings: number },
   opts: LintOptions
 ): boolean {
   if (opts.failOn === "warnings") {
-    return totals.errors > 0 || totals.warnings > 0;
+    return summary.errors > 0 || summary.warnings > 0;
   }
-  return totals.errors > 0;
+  return summary.errors > 0;
 }

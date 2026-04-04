@@ -34,8 +34,8 @@ export async function runDiff(opts: DiffOptions): Promise<void> {
     GRADE_ORDER.indexOf(head.grade) < GRADE_ORDER.indexOf(base.grade);
   const scoreDiff = base.score - head.score;
   const tokenIncreasePct =
-    base.tokenEstimate > 0
-      ? ((head.tokenEstimate - base.tokenEstimate) / base.tokenEstimate) * 100
+    base.tokenEstimate.total > 0
+      ? ((head.tokenEstimate.total - base.tokenEstimate.total) / base.tokenEstimate.total) * 100
       : 0;
 
   if (opts.format === "json") {
@@ -65,8 +65,8 @@ function printDiff({
   scoreDiff,
   tokenIncreasePct,
 }: {
-  base: { grade: string; score: number; tokenEstimate: number };
-  head: { grade: string; score: number; tokenEstimate: number };
+  base: { grade: string; score: number; tokenEstimate: { total: number } };
+  head: { grade: string; score: number; tokenEstimate: { total: number } };
   gradeDrop: boolean;
   scoreDiff: number;
   tokenIncreasePct: number;
@@ -92,10 +92,10 @@ function printDiff({
   const tokenLine =
     tokenIncreasePct > 0
       ? chalk.yellow(
-          `  Tokens : ~${base.tokenEstimate.toLocaleString()} → ~${head.tokenEstimate.toLocaleString()}  (+${tokenIncreasePct.toFixed(1)}%)`
+          `  Tokens : ~${base.tokenEstimate.total.toLocaleString()} → ~${head.tokenEstimate.total.toLocaleString()}  (+${tokenIncreasePct.toFixed(1)}%)`
         )
       : chalk.green(
-          `  Tokens : ~${base.tokenEstimate.toLocaleString()} → ~${head.tokenEstimate.toLocaleString()}`
+          `  Tokens : ~${base.tokenEstimate.total.toLocaleString()} → ~${head.tokenEstimate.total.toLocaleString()}`
         );
   console.log(tokenLine);
   console.log();

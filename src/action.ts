@@ -30,25 +30,25 @@ async function run(): Promise<void> {
   // Emit GitHub Actions output
   console.log(`::set-output name=grade::${result.grade}`);
   console.log(`::set-output name=score::${result.score}`);
-  console.log(`::set-output name=errors::${result.totals.errors}`);
-  console.log(`::set-output name=warnings::${result.totals.warnings}`);
+  console.log(`::set-output name=errors::${result.summary.errors}`);
+  console.log(`::set-output name=warnings::${result.summary.warnings}`);
 
   for (const issue of result.issues) {
     const level = issue.severity === "error" ? "error" : "warning";
     console.log(`::${level}::${issue.message}`);
   }
 
-  if (tokenBudget && result.tokenEstimate > tokenBudget) {
+  if (tokenBudget && result.tokenEstimate.total > tokenBudget) {
     console.error(
-      `::error::Token budget exceeded: ${result.tokenEstimate} > ${tokenBudget}`
+      `::error::Token budget exceeded: ${result.tokenEstimate.total} > ${tokenBudget}`
     );
     process.exit(EXIT.FAIL);
   }
 
   const failed =
     failOn === "warnings"
-      ? result.totals.errors > 0 || result.totals.warnings > 0
-      : result.totals.errors > 0;
+      ? result.summary.errors > 0 || result.summary.warnings > 0
+      : result.summary.errors > 0;
 
   process.exit(failed ? EXIT.FAIL : EXIT.PASS);
 }

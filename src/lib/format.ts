@@ -11,21 +11,21 @@ function gradeColor(grade: string): string {
   return chalk.red(grade);
 }
 
-export function printLint(result: LintResult, serverName?: string): void {
+export function printLint(result: LintResult): void {
   console.log();
   console.log(chalk.bold("  MCP Playground — Schema Linter"));
   console.log("  " + DIVIDER);
 
-  if (serverName) {
-    console.log(`  Server : ${serverName}`);
+  if (result.server?.name) {
+    console.log(`  Server : ${result.server.name}${result.server.version ? ` v${result.server.version}` : ""}`);
   }
   console.log(
-    `  Tools  : ${result.summary.tools}  ·  Resources: ${result.summary.resources}  ·  Prompts: ${result.summary.prompts}`
+    `  Tools  : ${result.summary.toolsChecked}  ·  Resources: ${result.summary.resourcesChecked}  ·  Prompts: ${result.summary.promptsChecked}`
   );
   console.log(
     `  Grade  : ${gradeColor(result.grade)}   ·  Score: ${result.score}/100`
   );
-  console.log(`  Tokens : ~${result.tokenEstimate.toLocaleString()} estimated`);
+  console.log(`  Tokens : ~${result.tokenEstimate.total.toLocaleString()} estimated`);
 
   const errors = result.issues.filter((i) => i.severity === "error");
   const warnings = result.issues.filter((i) => i.severity === "warning");
@@ -35,8 +35,8 @@ export function printLint(result: LintResult, serverName?: string): void {
     console.log();
     console.log(chalk.red.bold(`  ERRORS (${errors.length})`));
     for (const issue of errors) {
-      const tool = issue.tool ? ` tool "${issue.tool}" —` : "";
-      console.log(chalk.red(`  ✗${tool} ${issue.message}`));
+      const target = issue.target ? ` ${issue.category ?? "tool"} "${issue.target}" —` : "";
+      console.log(chalk.red(`  ✗${target} ${issue.message}`));
     }
   }
 
@@ -44,8 +44,8 @@ export function printLint(result: LintResult, serverName?: string): void {
     console.log();
     console.log(chalk.yellow.bold(`  WARNINGS (${warnings.length})`));
     for (const issue of warnings) {
-      const tool = issue.tool ? ` tool "${issue.tool}" —` : "";
-      console.log(chalk.yellow(`  ⚠${tool} ${issue.message}`));
+      const target = issue.target ? ` ${issue.category ?? "tool"} "${issue.target}" —` : "";
+      console.log(chalk.yellow(`  ⚠${target} ${issue.message}`));
     }
   }
 
@@ -53,8 +53,8 @@ export function printLint(result: LintResult, serverName?: string): void {
     console.log();
     console.log(chalk.blue.bold(`  INFO (${infos.length})`));
     for (const issue of infos) {
-      const tool = issue.tool ? ` tool "${issue.tool}" —` : "";
-      console.log(chalk.blue(`  ℹ${tool} ${issue.message}`));
+      const target = issue.target ? ` ${issue.category ?? "tool"} "${issue.target}" —` : "";
+      console.log(chalk.blue(`  ℹ${target} ${issue.message}`));
     }
   }
 
@@ -67,7 +67,7 @@ export function printLint(result: LintResult, serverName?: string): void {
   );
   console.log("  " + DIVIDER);
 
-  const { errors: errCount, warnings: warnCount } = result.totals;
+  const { errors: errCount, warnings: warnCount } = result.summary;
   if (errCount === 0 && warnCount === 0) {
     console.log(chalk.green.bold("  ✔ Passed"));
   } else {

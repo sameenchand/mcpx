@@ -4,17 +4,26 @@ export interface LintIssue {
   rule: string;
   severity: "error" | "warning" | "info";
   message: string;
-  tool?: string;
+  target?: string;
+  category?: string;
 }
 
 export interface LintResult {
+  ok: boolean;
   url: string;
+  server?: { name: string; version?: string };
   grade: string;
   score: number;
-  tokenEstimate: number;
-  totals: { errors: number; warnings: number; infos: number };
+  tokenEstimate: { total: number; perTool?: { name: string; tokens: number }[] };
+  summary: {
+    errors: number;
+    warnings: number;
+    infos: number;
+    toolsChecked: number;
+    resourcesChecked: number;
+    promptsChecked: number;
+  };
   issues: LintIssue[];
-  summary: { tools: number; resources: number; prompts: number };
 }
 
 export interface InspectResult {
