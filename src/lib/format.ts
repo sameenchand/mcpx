@@ -62,7 +62,7 @@ export function printLint(result: LintResult, failOn: "errors" | "warnings" = "e
   console.log();
   console.log(
     chalk.dim(
-      `  View full report → https://mcpplayground.tech/lint?url=${encoded}`
+      `  Open in MCP Playground → https://mcpplayground.tech/lint?url=${encoded}`
     )
   );
   console.log("  " + DIVIDER);
