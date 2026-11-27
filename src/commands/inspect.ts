@@ -1,11 +1,12 @@
 import ora from "ora";
 import chalk from "chalk";
-import { inspect as apiInspect } from "../lib/api.js";
+import { inspectTarget, type RunOptions } from "../lib/run.js";
 import { printInspect } from "../lib/format.js";
 import { EXIT } from "../lib/exit-codes.js";
 
 interface InspectOptions {
   format?: "json";
+  run?: RunOptions;
 }
 
 export async function runInspect(
@@ -16,7 +17,7 @@ export async function runInspect(
 
   let result;
   try {
-    result = await apiInspect(url);
+    result = await inspectTarget(url, opts.run);
   } catch (err) {
     spinner?.fail(chalk.red("Could not reach server"));
     console.error(

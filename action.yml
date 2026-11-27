@@ -4,8 +4,20 @@ author: sameenchand
 
 inputs:
   url:
-    description: MCP server URL to lint
-    required: true
+    description: MCP server URL to lint. Set this or `command`.
+    required: false
+  command:
+    description: Command that starts a stdio MCP server in the workspace, for example `node dist/server.js`. Set this or `url`.
+    required: false
+  headers:
+    description: 'HTTP headers to send, one "Name: value" per line. Use secrets for tokens.'
+    required: false
+  timeout:
+    description: Seconds to wait for the server to connect
+    required: false
+  remote:
+    description: Set to "true" to run through the hosted MCP Playground API instead of connecting from the runner
+    default: "false"
   fail-on:
     description: "Fail on: errors (default) or warnings"
     default: errors

@@ -3,9 +3,29 @@ name: Test mcpx Action
 on:
   push:
     branches: [main]
+  pull_request:
   workflow_dispatch:
 
 jobs:
+  test:
+    name: Build and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm build
+      - run: pnpm test
+      - name: Check that the committed dist matches the source
+        run: git diff --exit-code -- dist
+
   test-lint:
     name: Lint MCP Server
     runs-on: ubuntu-latest

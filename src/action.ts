@@ -1,4 +1,5 @@
-import { lint as apiLint } from "./lib/api.js";
+import { lintTarget } from "./lib/run.js";
+import { parseHeaders } from "./lib/target.js";
 import { EXIT } from "./lib/exit-codes.js";
 
 const GRADE_ORDER = ["F", "D", "C", "B", "A"];
@@ -15,14 +16,28 @@ async function run(): Promise<void> {
   const tokenBudgetRaw = getInput("token-budget");
   const tokenBudget = tokenBudgetRaw ? parseInt(tokenBudgetRaw, 10) : undefined;
 
-  if (!url) {
-    console.error("::error::Input 'url' is required");
+  const command = getInput("command");
+  const remote = getInput("remote").toLowerCase() === "true";
+  const timeoutRaw = getInput("timeout");
+
+  if ((url && command) || (!url && !command)) {
+    console.error("::error::Set exactly one of the 'url' or 'command' inputs");
     process.exit(EXIT.ERROR);
   }
 
   let result;
   try {
-    result = await apiLint(url);
+    const headers = parseHeaders(getInput("headers").split("\n"));
+    // Keep header values (usually tokens) out of the job log.
+    for (const value of Object.values(headers)) {
+      if (value) console.log(`::add-mask::${value}`);
+    }
+    const timeoutSec = timeoutRaw ? parseFloat(timeoutRaw) : undefined;
+    result = await lintTarget(url || command, {
+      remote,
+      headers,
+      timeoutMs: timeoutSec && timeoutSec > 0 ? Math.round(timeoutSec * 1000) : undefined,
+    });
   } catch (err) {
     console.error(
       `::error::Could not reach server: ${err instanceof Error ? err.message : String(err)}`
