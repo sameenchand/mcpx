@@ -1,6 +1,6 @@
 import ora from "ora";
 import chalk from "chalk";
-import { lint as apiLint } from "../lib/api.js";
+import { lintTarget, type RunOptions } from "../lib/run.js";
 import { printLint } from "../lib/format.js";
 import { EXIT } from "../lib/exit-codes.js";
 
@@ -12,6 +12,7 @@ interface LintOptions {
   tokenBudget?: number;
   format?: "json";
   quiet?: boolean;
+  run?: RunOptions;
 }
 
 export async function runLint(url: string, opts: LintOptions): Promise<void> {
@@ -19,7 +20,7 @@ export async function runLint(url: string, opts: LintOptions): Promise<void> {
 
   let result;
   try {
-    result = await apiLint(url);
+    result = await lintTarget(url, opts.run);
   } catch (err) {
     spinner?.fail(chalk.red("Could not reach server"));
     if (!opts.quiet) {

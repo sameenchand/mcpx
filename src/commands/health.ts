@@ -1,11 +1,12 @@
 import ora from "ora";
 import chalk from "chalk";
-import { health as apiHealth } from "../lib/api.js";
+import { healthTarget, type RunOptions } from "../lib/run.js";
 import { printHealth } from "../lib/format.js";
 import { EXIT } from "../lib/exit-codes.js";
 
 interface HealthOptions {
   format?: "json";
+  run?: RunOptions;
 }
 
 export async function runHealth(
@@ -16,7 +17,7 @@ export async function runHealth(
 
   let result;
   try {
-    result = await apiHealth(url);
+    result = await healthTarget(url, opts.run);
   } catch (err) {
     spinner?.fail(chalk.red("Could not reach server"));
     console.error(

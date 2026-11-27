@@ -1,5 +1,6 @@
 import chalk from "chalk";
-import type { LintResult, InspectResult, HealthResult } from "./api.js";
+import type { LintResult, InspectResult, HealthResult } from "./types.js";
+import { isLocalUrl } from "./target.js";
 
 const DIVIDER = chalk.dim("─".repeat(41));
 
@@ -65,13 +66,19 @@ export function printLint(
     }
   }
 
-  const encoded = encodeURIComponent(result.url);
-  console.log();
-  console.log(
-    chalk.dim(
-      `  Open in MCP Playground → https://mcpplayground.tech/lint?url=${encoded}`
-    )
-  );
+  // The hosted playground can only reach public URLs.
+  const isPublicUrl = /^https?:\/\//i.test(result.url) && !isLocalUrl(result.url);
+  if (isPublicUrl) {
+    const encoded = encodeURIComponent(result.url);
+    console.log();
+    console.log(
+      chalk.dim(
+        `  Open in MCP Playground → https://mcpplayground.tech/lint?url=${encoded}`
+      )
+    );
+  } else {
+    console.log();
+  }
   console.log("  " + DIVIDER);
 
   const { errors: errCount, warnings: warnCount } = result.summary;
@@ -133,7 +140,7 @@ export function printInspect(result: InspectResult): void {
   if (result.resources.length > 0) {
     console.log(chalk.bold.magenta(`\n  Resources (${result.resources.length})`));
     for (const r of result.resources) {
-      console.log(chalk.magenta(`  • ${r.name}`));
+      console.log(chalk.magenta(`  • ${r.name ?? r.uri}`));
       if (r.description) {
         const firstLine = r.description.split("\n")[0].trim();
         console.log(chalk.dim(`    ${firstLine}`));

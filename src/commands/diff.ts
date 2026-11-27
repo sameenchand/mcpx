@@ -1,6 +1,6 @@
 import ora from "ora";
 import chalk from "chalk";
-import { lint as apiLint } from "../lib/api.js";
+import { lintTarget, type RunOptions } from "../lib/run.js";
 import { EXIT } from "../lib/exit-codes.js";
 
 const GRADE_ORDER = ["F", "D", "C", "B", "A"];
@@ -11,6 +11,7 @@ interface DiffOptions {
   tokenThreshold: number;
   scoreDrop: number;
   format?: "json";
+  run?: RunOptions;
 }
 
 export async function runDiff(opts: DiffOptions): Promise<void> {
@@ -19,7 +20,10 @@ export async function runDiff(opts: DiffOptions): Promise<void> {
 
   let base, head;
   try {
-    [base, head] = await Promise.all([apiLint(opts.base), apiLint(opts.head)]);
+    [base, head] = await Promise.all([
+      lintTarget(opts.base, opts.run),
+      lintTarget(opts.head, opts.run),
+    ]);
   } catch (err) {
     spinner?.fail(chalk.red("Could not reach one or both servers"));
     console.error(
