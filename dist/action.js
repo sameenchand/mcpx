@@ -20265,6 +20265,13 @@ async function withTimeout(work, ms) {
     if (timer) clearTimeout(timer);
   }
 }
+function inheritedEnv() {
+  const env = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (value !== void 0) env[key] = value;
+  }
+  return env;
+}
 async function tryConnect(transport, timeoutMs) {
   const client = new Client(CLIENT_INFO);
   try {
@@ -20288,6 +20295,8 @@ async function connect(target, opts) {
     const transport = new StdioClientTransport({
       command: target.command,
       args: target.args,
+      env: target.env ? { ...getDefaultEnvironment(), ...target.env } : inheritedEnv(),
+      ...target.cwd ? { cwd: target.cwd } : {},
       stderr: "pipe"
     });
     let stderrTail = "";

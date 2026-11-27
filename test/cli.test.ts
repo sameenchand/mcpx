@@ -162,3 +162,17 @@ describe("mcpx against a local HTTP endpoint", () => {
     expect(run.code).toBe(2);
   });
 });
+
+describe("numeric options", () => {
+  it("parses --token-threshold in base 10", async () => {
+    // good → bad shrinks the token count, so only a wrongly parsed threshold could fail on tokens.
+    // v2 is ~34% smaller than good; compare the other way round for a ~52% increase.
+    const v2 = `node "${fixture}" v2`;
+    const under = await mcpx("diff", "--base", v2, "--head", good, "--allow-breaking", "--token-threshold", "60", "--format", "json");
+    expect(JSON.parse(under.stdout).tokenIncreasePct).toBeGreaterThan(40);
+    expect(JSON.parse(under.stdout).tokenIncreasePct).toBeLessThan(60);
+    expect(under.code).toBe(0);
+    const over = await mcpx("diff", "--base", v2, "--head", good, "--allow-breaking", "--token-threshold", "40", "--format", "json");
+    expect(over.code).toBe(1);
+  });
+});

@@ -20,6 +20,53 @@ Or run without installing:
 npx @samsec/mcpx lint https://mcp.example.com/mcp
 ```
 
+## Scan your own setup
+
+One command, no arguments:
+
+```bash
+npx @samsec/mcpx scan
+```
+
+`scan` finds the MCP servers already configured for Claude Desktop, Claude Code, Cursor, VS Code and Windsurf, connects to each one, and reports:
+
+- **Context cost**: how many tokens each server's tool definitions take, and the total per client as a share of the context window.
+- **Security**: tool descriptions that carry instructions for the model, hidden characters, or references to credentials.
+- **Changes since your last scan**: tools that were removed, changed shape, or had their description reworded after you first approved them.
+
+```
+  mcpx scan
+  ────────────────────────────────────────────────────────
+  SERVER      CLIENTS           TOOLS  TOKENS    GRADE
+  github      Cursor, Windsurf  26     ~8,412    B
+  weather     Cursor            2      ~117      A
+  calculator  Cursor            1      ~95       B  ✗ security
+  ────────────────────────────────────────────────────────
+
+  CONTEXT COST
+  Tool definitions are loaded into every conversation before you type anything.
+  Cursor            ~8,624 tokens  4.3% of a 200,000-token window
+  Windsurf          ~8,412 tokens  4.2% of a 200,000-token window
+
+  SECURITY (1)
+  ✗ calculator · tool "add_numbers" — Metadata tells the model to hide something from the user. This is a tool-poisoning pattern.
+```
+
+Everything runs on your machine. Servers are started the same way your client starts them, with the environment from your config. Values from your config (tokens, headers, arguments, URLs) are never printed or saved. The baseline in `~/.mcpx/scan-lock.json` holds only server names and tool definitions.
+
+Config files checked into the current directory (`.mcp.json`, `.cursor/mcp.json`, `.vscode/mcp.json`) are skipped by default, because scanning starts the servers they define. Add `--project` for a repo you trust.
+
+| Option | Description | Default |
+|---|---|---|
+| `--project` | Also scan config files in the current directory | off |
+| `--context-window <tokens>` | Window size used for the percentage | `200000` |
+| `--timeout <seconds>` | Seconds to wait for each server | `30` |
+| `--no-save` | Do not update the baseline | — |
+| `--list` | List the servers without starting them | — |
+| `--format json` | Output raw JSON | — |
+
+Exits `1` when a security error is found, `0` otherwise. Servers that need an interactive sign-in are listed but not read.
+
 ## Targets
 
 Every command takes a **target**, which is either:

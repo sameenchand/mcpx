@@ -5,7 +5,8 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 
-const mode = process.argv[2] ?? "good";
+// FIXTURE_MODE lets a test change the variant without changing the command line.
+const mode = process.env.FIXTURE_MODE ?? process.argv[2] ?? "good";
 const bad = mode === "bad";
 
 const goodTools = [

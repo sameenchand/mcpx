@@ -31,7 +31,7 @@ async function health(url) {
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { StdioClientTransport, getDefaultEnvironment } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { WebSocketClientTransport } from "@modelcontextprotocol/sdk/client/websocket.js";
 var ConnectError = class extends Error {
   constructor(code, message) {
@@ -62,6 +62,13 @@ async function withTimeout(work, ms) {
     if (timer) clearTimeout(timer);
   }
 }
+function inheritedEnv() {
+  const env = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (value !== void 0) env[key] = value;
+  }
+  return env;
+}
 async function tryConnect(transport, timeoutMs) {
   const client = new Client(CLIENT_INFO);
   try {
@@ -85,6 +92,8 @@ async function connect(target, opts) {
     const transport = new StdioClientTransport({
       command: target.command,
       args: target.args,
+      env: target.env ? { ...getDefaultEnvironment(), ...target.env } : inheritedEnv(),
+      ...target.cwd ? { cwd: target.cwd } : {},
       stderr: "pipe"
     });
     let stderrTail = "";
@@ -1228,11 +1237,468 @@ function printSchemaDiff(schema, allowBreaking) {
   }
 }
 
+// src/commands/scan.ts
+import { createHash } from "crypto";
+import { mkdirSync, readFileSync as readFileSync2, writeFileSync } from "fs";
+import { homedir as homedir2 } from "os";
+import { join as join2 } from "path";
+import chalk6 from "chalk";
+import ora5 from "ora";
+
+// src/lib/discover.ts
+import { existsSync, readFileSync } from "fs";
+import { homedir } from "os";
+import { join, resolve } from "path";
+var isObject = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
+function stripJsonComments(text) {
+  let out = "";
+  let inString = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    const next = text[i + 1];
+    if (inString) {
+      out += ch;
+      if (ch === "\\" && next !== void 0) {
+        out += next;
+        i++;
+      } else if (ch === '"') {
+        inString = false;
+      }
+    } else if (ch === '"') {
+      inString = true;
+      out += ch;
+    } else if (ch === "/" && next === "/") {
+      while (i < text.length && text[i] !== "\n") i++;
+      out += "\n";
+    } else if (ch === "/" && next === "*") {
+      const end = text.indexOf("*/", i + 2);
+      i = end === -1 ? text.length : end + 1;
+    } else {
+      out += ch;
+    }
+  }
+  return out.replace(/,(\s*[}\]])/g, "$1");
+}
+function readJson(path) {
+  let text;
+  try {
+    text = readFileSync(path, "utf8");
+  } catch {
+    return void 0;
+  }
+  for (const candidate of [text, stripJsonComments(text)]) {
+    try {
+      const doc = JSON.parse(candidate);
+      return isObject(doc) ? doc : void 0;
+    } catch {
+    }
+  }
+  return void 0;
+}
+function appData(home, platform, env) {
+  if (platform === "darwin") return join(home, "Library", "Application Support");
+  if (platform === "win32") return env.APPDATA ?? join(home, "AppData", "Roaming");
+  return env.XDG_CONFIG_HOME ?? join(home, ".config");
+}
+function sources(home, cwd, platform, env) {
+  const data = appData(home, platform, env);
+  const mcpServers = (doc) => doc.mcpServers;
+  const vscode = (doc) => doc.servers ?? doc.mcpServers;
+  return [
+    { client: "Claude Desktop", scope: "user", path: join(data, "Claude", "claude_desktop_config.json"), pick: mcpServers },
+    { client: "Claude Code", scope: "user", path: join(home, ".claude.json"), pick: mcpServers },
+    {
+      // Servers the user added for this project only. Stored in their own home directory.
+      client: "Claude Code",
+      scope: "user",
+      path: join(home, ".claude.json"),
+      pick: (doc) => {
+        const projects = doc.projects;
+        const project = isObject(projects) ? projects[cwd] : void 0;
+        return isObject(project) ? project.mcpServers : void 0;
+      }
+    },
+    { client: "Cursor", scope: "user", path: join(home, ".cursor", "mcp.json"), pick: mcpServers },
+    { client: "VS Code", scope: "user", path: join(data, "Code", "User", "mcp.json"), pick: vscode },
+    { client: "Windsurf", scope: "user", path: join(home, ".codeium", "windsurf", "mcp_config.json"), pick: mcpServers },
+    { client: "Claude Code", scope: "project", path: join(cwd, ".mcp.json"), pick: mcpServers },
+    { client: "Cursor", scope: "project", path: join(cwd, ".cursor", "mcp.json"), pick: mcpServers },
+    { client: "VS Code", scope: "project", path: join(cwd, ".vscode", "mcp.json"), pick: vscode }
+  ];
+}
+var Unresolved = class extends Error {
+};
+function expand(value, env) {
+  return value.replace(/\$\{([^}]+)\}/g, (_, expr) => {
+    if (expr.startsWith("input:")) throw new Unresolved("needs a value the client asks for at startup");
+    const body = expr.startsWith("env:") ? expr.slice(4) : expr;
+    const [name, fallback] = body.split(":-", 2);
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) return `\${${expr}}`;
+    const resolved = env[name] ?? fallback;
+    if (resolved === void 0) throw new Unresolved(`environment variable ${name} is not set`);
+    return resolved;
+  });
+}
+function stringMap(value, env) {
+  const out = {};
+  if (!isObject(value)) return out;
+  for (const [key, raw] of Object.entries(value)) {
+    if (typeof raw === "string") out[key] = expand(raw, env);
+    else if (typeof raw === "number" || typeof raw === "boolean") out[key] = String(raw);
+  }
+  return out;
+}
+function toServer(name, entry, source, env) {
+  const base = { name, client: source.client, scope: source.scope };
+  if (entry.disabled === true || entry.enabled === false) {
+    return { ...base, skipped: "disabled in the client" };
+  }
+  try {
+    const url = typeof entry.url === "string" ? entry.url : typeof entry.serverUrl === "string" ? entry.serverUrl : void 0;
+    if (url) {
+      const expanded = expand(url, env);
+      new URL(expanded);
+      return {
+        ...base,
+        target: { kind: "url", url: expanded, label: name },
+        headers: stringMap(entry.headers, env)
+      };
+    }
+    if (typeof entry.command === "string" && entry.command.trim().length > 0) {
+      const args = Array.isArray(entry.args) ? entry.args.filter((a) => typeof a === "string" || typeof a === "number").map((a) => expand(String(a), env)) : [];
+      const cwd = typeof entry.cwd === "string" ? expand(entry.cwd, env) : void 0;
+      return {
+        ...base,
+        target: {
+          kind: "stdio",
+          command: expand(entry.command, env),
+          args,
+          label: name,
+          env: stringMap(entry.env, env),
+          ...cwd ? { cwd } : {}
+        }
+      };
+    }
+  } catch (err) {
+    if (err instanceof Unresolved) return { ...base, skipped: err.message };
+    return { ...base, skipped: "the config entry has an invalid URL" };
+  }
+  return { ...base, skipped: "the config entry has no command or url" };
+}
+function discoverServers(opts = {}) {
+  const home = opts.home ?? homedir();
+  const cwd = resolve(opts.cwd ?? process.cwd());
+  const platform = opts.platform ?? process.platform;
+  const env = opts.env ?? process.env;
+  const servers = [];
+  const projectFilesSkipped = [];
+  for (const source of sources(home, cwd, platform, env)) {
+    if (source.scope === "project" && !opts.includeProject) {
+      if (existsSync(source.path)) projectFilesSkipped.push(source.path);
+      continue;
+    }
+    const doc = readJson(source.path);
+    if (!doc) continue;
+    const map = source.pick(doc);
+    if (!isObject(map)) continue;
+    for (const [name, entry] of Object.entries(map)) {
+      if (isObject(entry)) servers.push(toServer(name, entry, source, env));
+    }
+  }
+  return { servers, projectFilesSkipped };
+}
+
+// src/commands/scan.ts
+var CONCURRENCY = 4;
+var DEFAULT_TIMEOUT_MS = 3e4;
+var LOCK_VERSION = 1;
+function identity(target) {
+  const raw = target.kind === "url" ? `url
+${target.url}` : `stdio
+${target.command}
+${target.args.join("\n")}
+${target.cwd ?? ""}`;
+  return createHash("sha256").update(raw).digest("hex").slice(0, 32);
+}
+function group(servers) {
+  const groups = /* @__PURE__ */ new Map();
+  for (const server of servers) {
+    const key = server.target ? identity(server.target) : `skipped:${server.client}:${server.name}`;
+    const existing = groups.get(key);
+    if (existing) {
+      if (!existing.clients.includes(server.client)) existing.clients.push(server.client);
+    } else {
+      groups.set(key, { key, name: server.name, clients: [server.client], server });
+    }
+  }
+  return [...groups.values()];
+}
+function lockPath() {
+  return join2(process.env.MCPX_HOME ?? join2(homedir2(), ".mcpx"), "scan-lock.json");
+}
+function readLock() {
+  try {
+    const doc = JSON.parse(readFileSync2(lockPath(), "utf8"));
+    if (doc.version === LOCK_VERSION && doc.servers && typeof doc.servers === "object") return doc;
+  } catch {
+  }
+  return { version: LOCK_VERSION, servers: {} };
+}
+function writeLock(lock) {
+  const path = lockPath();
+  mkdirSync(join2(path, ".."), { recursive: true });
+  writeFileSync(path, JSON.stringify(lock, null, 2) + "\n", { mode: 384 });
+}
+function asInspect(s) {
+  return {
+    url: s.name,
+    serverInfo: { name: s.name, version: "unknown" },
+    capabilities: { tools: true, resources: true, prompts: true },
+    tools: s.tools,
+    resources: s.resources,
+    prompts: s.prompts,
+    transport: "stdio",
+    connectionTimeMs: 0
+  };
+}
+async function scanOne(g, previous, timeoutMs) {
+  const base = { name: g.name, clients: g.clients, status: "skipped", security: [] };
+  const { target, headers, skipped } = g.server;
+  if (!target) return { report: { ...base, note: skipped ?? "not scannable" } };
+  let inspected;
+  try {
+    inspected = await inspectDirect(target, { headers, timeoutMs });
+  } catch (err) {
+    const code = err instanceof ConnectError ? err.code : "CONNECTION_FAILED";
+    if (code === "UNAUTHORIZED") {
+      return { report: { ...base, status: "auth_required", note: "needs sign-in, so its tools could not be read" } };
+    }
+    if (code === "TIMEOUT") {
+      return { report: { ...base, status: "timeout", note: `no response within ${Math.round(timeoutMs / 1e3)}s` } };
+    }
+    return {
+      report: {
+        ...base,
+        status: "failed",
+        note: target.kind === "stdio" ? `could not start "${target.command}"` : "could not connect"
+      }
+    };
+  }
+  const lint2 = lintMcpServer(inspected);
+  const security = lint2.issues.filter((i) => i.rule.startsWith("sec-") && i.severity !== "info").map((i) => ({
+    severity: i.severity,
+    rule: i.rule,
+    target: `${i.category} "${i.target}"`,
+    message: i.message
+  }));
+  const snapshot = {
+    name: g.name,
+    scannedAt: (/* @__PURE__ */ new Date()).toISOString(),
+    tools: inspected.tools,
+    resources: inspected.resources,
+    prompts: inspected.prompts
+  };
+  let changes;
+  if (previous) {
+    const d = diffSchemas(asInspect(previous), inspected);
+    changes = [...d.breaking, ...d.changed, ...d.added];
+  }
+  return {
+    snapshot,
+    report: {
+      ...base,
+      status: "ok",
+      transport: inspected.transport,
+      tools: inspected.tools.length,
+      tokens: lint2.tokenEstimate.total,
+      grade: lint2.grade,
+      score: lint2.score,
+      security,
+      changes,
+      lastScannedAt: previous?.scannedAt
+    }
+  };
+}
+async function pool(items, limit, work) {
+  const results = new Array(items.length);
+  let next = 0;
+  const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const index = next++;
+      results[index] = await work(items[index]);
+    }
+  });
+  await Promise.all(runners);
+  return results;
+}
+function clientCosts(reports, contextWindow) {
+  const totals = /* @__PURE__ */ new Map();
+  for (const r of reports) {
+    if (r.status !== "ok") continue;
+    for (const client of r.clients) {
+      const t = totals.get(client) ?? { servers: 0, tokens: 0 };
+      t.servers += 1;
+      t.tokens += r.tokens ?? 0;
+      totals.set(client, t);
+    }
+  }
+  return [...totals.entries()].map(([client, t]) => ({ client, ...t, share: t.tokens / contextWindow })).sort((a, b) => b.tokens - a.tokens);
+}
+var pad = (text, width) => text + " ".repeat(Math.max(0, width - text.length));
+var clip = (text, width) => text.length > width ? text.slice(0, width - 1) + "\u2026" : text;
+function gradeColor2(grade) {
+  if (grade === "A") return chalk6.green(grade);
+  if (grade === "B") return chalk6.cyan(grade);
+  if (grade === "C") return chalk6.yellow(grade);
+  return chalk6.red(grade);
+}
+function printReport(reports, costs, opts, firstRun, projectFilesSkipped) {
+  const scanned = reports.filter((r) => r.status === "ok").sort((a, b) => (b.tokens ?? 0) - (a.tokens ?? 0));
+  const rest = reports.filter((r) => r.status !== "ok");
+  const nameWidth = Math.min(28, Math.max(6, ...reports.map((r) => r.name.length)));
+  const clientWidth = Math.min(30, Math.max(7, ...reports.map((r) => r.clients.join(", ").length)));
+  const rule = chalk6.dim("\u2500".repeat(nameWidth + clientWidth + 30));
+  console.log();
+  console.log(chalk6.bold("  mcpx scan"));
+  console.log("  " + rule);
+  console.log(
+    chalk6.dim(`  ${pad("SERVER", nameWidth)}  ${pad("CLIENTS", clientWidth)}  ${pad("TOOLS", 5)}  ${pad("TOKENS", 8)}  GRADE`)
+  );
+  for (const r of scanned) {
+    const flag = r.security.some((f) => f.severity === "error") ? chalk6.red("  \u2717 security") : "";
+    console.log(
+      `  ${pad(clip(r.name, nameWidth), nameWidth)}  ${pad(clip(r.clients.join(", "), clientWidth), clientWidth)}  ${pad(String(r.tools), 5)}  ${pad("~" + (r.tokens ?? 0).toLocaleString("en-US"), 8)}  ${gradeColor2(r.grade ?? "?")}${flag}`
+    );
+  }
+  for (const r of rest) {
+    console.log(
+      chalk6.dim(`  ${pad(clip(r.name, nameWidth), nameWidth)}  ${pad(clip(r.clients.join(", "), clientWidth), clientWidth)}  ${r.note ?? r.status}`)
+    );
+  }
+  console.log("  " + rule);
+  if (costs.length > 0) {
+    console.log();
+    console.log(chalk6.bold("  CONTEXT COST"));
+    console.log(chalk6.dim("  Tool definitions are loaded into every conversation before you type anything."));
+    for (const c of costs) {
+      const pct = (c.share * 100).toFixed(1);
+      const color = c.share >= 0.2 ? chalk6.red : c.share >= 0.1 ? chalk6.yellow : chalk6.green;
+      console.log(
+        `  ${pad(c.client, clientWidth)}  ${color(`~${c.tokens.toLocaleString("en-US")} tokens`)}  ${color(`${pct}%`)} of a ${opts.contextWindow.toLocaleString("en-US")}-token window`
+      );
+    }
+    console.log(chalk6.dim("  Token counts are estimates; clients that load tools on demand use less."));
+  }
+  const findings = scanned.flatMap((r) => r.security.map((f) => ({ server: r.name, ...f })));
+  if (findings.length > 0) {
+    console.log();
+    console.log(chalk6.bold.red(`  SECURITY (${findings.length})`));
+    for (const f of findings) {
+      const mark = f.severity === "error" ? chalk6.red("\u2717") : chalk6.yellow("\u26A0");
+      console.log(`  ${mark} ${f.server} \xB7 ${f.target} \u2014 ${f.message}`);
+    }
+  }
+  const changed = scanned.filter((r) => r.changes && r.changes.length > 0);
+  if (changed.length > 0) {
+    console.log();
+    console.log(chalk6.bold.yellow("  CHANGED SINCE YOUR LAST SCAN"));
+    for (const r of changed) {
+      const since = r.lastScannedAt ? ` (last scanned ${r.lastScannedAt.slice(0, 10)})` : "";
+      console.log(chalk6.dim(`  ${r.name}${since}`));
+      for (const c of r.changes ?? []) {
+        const mark = c.kind === "breaking" ? chalk6.red("\u2717") : c.kind === "changed" ? chalk6.yellow("~") : chalk6.green("+");
+        console.log(`    ${mark} ${c.category} "${c.target}" \u2014 ${c.message}`);
+      }
+    }
+  } else if (!firstRun && scanned.length > 0) {
+    console.log();
+    console.log(chalk6.green("  No tool definitions changed since your last scan."));
+  }
+  console.log();
+  if (firstRun && opts.save && scanned.length > 0) {
+    console.log(chalk6.dim("  Saved a baseline. Run mcpx scan again later to see which tool definitions changed."));
+  }
+  if (projectFilesSkipped.length > 0) {
+    console.log(
+      chalk6.dim(
+        `  ${projectFilesSkipped.length} project config file${projectFilesSkipped.length > 1 ? "s" : ""} in this directory not scanned. Add --project if you trust this repo: scanning starts its servers.`
+      )
+    );
+  }
+  console.log();
+}
+async function runScan(opts) {
+  const { servers, projectFilesSkipped } = discoverServers({ includeProject: opts.includeProject });
+  const groups = group(servers);
+  if (opts.list) {
+    const listing = groups.map((g) => ({
+      name: g.name,
+      clients: g.clients,
+      scope: g.server.scope,
+      kind: g.server.target?.kind ?? "skipped",
+      ...g.server.skipped ? { skipped: g.server.skipped } : {}
+    }));
+    if (opts.format === "json") {
+      console.log(JSON.stringify({ servers: listing }, null, 2));
+    } else if (listing.length === 0) {
+      console.log("\n  No MCP servers found in Claude Desktop, Claude Code, Cursor, VS Code or Windsurf.\n");
+    } else {
+      console.log();
+      for (const s of listing) {
+        console.log(`  ${s.name}  ${chalk6.dim(`${s.clients.join(", ")} \xB7 ${s.kind}${s.skipped ? ` \xB7 ${s.skipped}` : ""}`)}`);
+      }
+      console.log();
+    }
+    process.exit(EXIT.PASS);
+  }
+  if (groups.length === 0) {
+    if (opts.format === "json") {
+      console.log(JSON.stringify({ servers: [], clients: [], contextWindow: opts.contextWindow }, null, 2));
+    } else {
+      console.log("\n  No MCP servers found in Claude Desktop, Claude Code, Cursor, VS Code or Windsurf.");
+      if (projectFilesSkipped.length > 0) {
+        console.log("  This directory has project config files. Add --project to scan them if you trust this repo.");
+      }
+      console.log();
+    }
+    process.exit(EXIT.PASS);
+  }
+  const lock = readLock();
+  const firstRun = Object.keys(lock.servers).length === 0;
+  const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const spinner = opts.format === "json" ? null : ora5(`Scanning ${groups.length} MCP server${groups.length > 1 ? "s" : ""}\u2026`).start();
+  const results = await pool(groups, CONCURRENCY, (g) => scanOne(g, lock.servers[g.key], timeoutMs));
+  spinner?.stop();
+  const reports = results.map((r) => r.report);
+  const costs = clientCosts(reports, opts.contextWindow);
+  if (opts.save) {
+    results.forEach((r, i) => {
+      const g = groups[i];
+      if (r.snapshot && g) lock.servers[g.key] = r.snapshot;
+    });
+    try {
+      writeLock(lock);
+    } catch {
+      if (opts.format !== "json") console.error(chalk6.yellow("  Could not save the baseline for next time."));
+    }
+  }
+  if (opts.format === "json") {
+    console.log(JSON.stringify({ servers: reports, clients: costs, contextWindow: opts.contextWindow }, null, 2));
+  } else {
+    printReport(reports, costs, opts, firstRun, projectFilesSkipped);
+  }
+  const hasSecurityError = reports.some((r) => r.security.some((f) => f.severity === "error"));
+  process.exit(hasSecurityError ? EXIT.FAIL : EXIT.PASS);
+}
+
 // src/index.ts
 var program = new Command();
 program.name("mcpx").description(
   "Lint and inspect MCP servers. A target is a server URL or a quoted command that starts a stdio server."
 ).version("0.2.0");
+function int(value) {
+  return Number.parseInt(value, 10);
+}
 function collect(value, previous) {
   return [...previous, value];
 }
@@ -1264,7 +1730,7 @@ withConnectionOptions(
     "--fail-on <level>",
     "Fail on: errors (default) or warnings",
     "errors"
-  ).option("--min-grade <grade>", "Fail if grade is below threshold (A, B, C, D, F)").option("--token-budget <n>", "Fail if token footprint exceeds N", parseInt).option("--format <fmt>", "Output format: json").option("--quiet", "No output, just exit code")
+  ).option("--min-grade <grade>", "Fail if grade is below threshold (A, B, C, D, F)").option("--token-budget <n>", "Fail if token footprint exceeds N", int).option("--format <fmt>", "Output format: json").option("--quiet", "No output, just exit code")
 ).action((target, opts) => {
   if (opts.failOn !== "errors" && opts.failOn !== "warnings") {
     console.error(`error: --fail-on must be "errors" or "warnings", got "${opts.failOn}"`);
@@ -1295,10 +1761,10 @@ withConnectionOptions(
   runHealth(target, { format: opts.format, run: runOptions(opts) });
 });
 withConnectionOptions(
-  program.command("diff").description("Compare two MCP server versions and fail CI on regressions").requiredOption("--base <target>", "Base server URL or command").requiredOption("--head <target>", "Head server URL or command").option("--score-drop <n>", "Fail if score drops more than N points", parseInt, 10).option(
+  program.command("diff").description("Compare two MCP server versions and fail CI on regressions").requiredOption("--base <target>", "Base server URL or command").requiredOption("--head <target>", "Head server URL or command").option("--score-drop <n>", "Fail if score drops more than N points", int, 10).option(
     "--token-threshold <n>",
     "Fail if token footprint increases more than N%",
-    parseInt,
+    int,
     20
   ).option("--allow-breaking", "Do not fail when tools or parameters are removed or changed incompatibly").option("--format <fmt>", "Output format: json")
 ).action((opts) => {
@@ -1310,6 +1776,26 @@ withConnectionOptions(
     format: opts.format,
     allowBreaking: opts.allowBreaking,
     run: runOptions(opts)
+  });
+});
+program.command("scan").description(
+  "Find the MCP servers configured for your AI clients and report their context cost, security findings and changes since the last scan"
+).option("--project", "Also scan config files checked into the current directory. Starts the servers they define").option("--context-window <tokens>", "Context window size used for the percentage", int, 2e5).option("--timeout <seconds>", "Seconds to wait for each server", parseFloat).option("--no-save", "Do not update the baseline used to detect changes").option("--list", "List the servers that would be scanned without starting them").option("--format <fmt>", "Output format: json").action((opts) => {
+  if (!(opts.contextWindow > 0)) {
+    console.error("error: --context-window must be a positive number of tokens.");
+    process.exit(1);
+  }
+  if (opts.timeout !== void 0 && !(opts.timeout > 0)) {
+    console.error("error: --timeout must be a positive number of seconds.");
+    process.exit(1);
+  }
+  runScan({
+    includeProject: opts.project,
+    contextWindow: opts.contextWindow,
+    timeoutMs: opts.timeout !== void 0 ? Math.round(opts.timeout * 1e3) : void 0,
+    save: opts.save,
+    list: opts.list,
+    format: opts.format
   });
 });
 program.parse();

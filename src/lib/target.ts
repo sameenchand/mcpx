@@ -5,7 +5,19 @@
 
 export type Target =
   | { kind: "url"; url: string; label: string }
-  | { kind: "stdio"; command: string; args: string[]; label: string };
+  | {
+      kind: "stdio";
+      command: string;
+      args: string[];
+      label: string;
+      /**
+       * Extra environment for the server process. When set, the process gets a
+       * minimal base environment plus these values, the way MCP clients start
+       * configured servers. When unset, it inherits the caller's environment.
+       */
+      env?: Record<string, string>;
+      cwd?: string;
+    };
 
 const URL_PREFIX = /^(https?|wss?):\/\//i;
 

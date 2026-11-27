@@ -4,6 +4,7 @@ import { runLint } from "./commands/lint.js";
 import { runInspect } from "./commands/inspect.js";
 import { runHealth } from "./commands/health.js";
 import { runDiff } from "./commands/diff.js";
+import { runScan } from "./commands/scan.js";
 import { parseHeaders } from "./lib/target.js";
 import type { RunOptions } from "./lib/run.js";
 
@@ -15,6 +16,14 @@ program
     "Lint and inspect MCP servers. A target is a server URL or a quoted command that starts a stdio server."
   )
   .version(__VERSION__);
+
+/**
+ * Commander calls an option parser with (value, previousValue). Passing parseInt
+ * directly would use the default value as the radix, so wrap it.
+ */
+function int(value: string): number {
+  return Number.parseInt(value, 10);
+}
 
 function collect(value: string, previous: string[]): string[] {
   return [...previous, value];
@@ -59,7 +68,7 @@ withConnectionOptions(
       "errors"
     )
     .option("--min-grade <grade>", "Fail if grade is below threshold (A, B, C, D, F)")
-    .option("--token-budget <n>", "Fail if token footprint exceeds N", parseInt)
+    .option("--token-budget <n>", "Fail if token footprint exceeds N", int)
     .option("--format <fmt>", "Output format: json")
     .option("--quiet", "No output, just exit code")
 ).action((target: string, opts) => {
@@ -106,11 +115,11 @@ withConnectionOptions(
     .description("Compare two MCP server versions and fail CI on regressions")
     .requiredOption("--base <target>", "Base server URL or command")
     .requiredOption("--head <target>", "Head server URL or command")
-    .option("--score-drop <n>", "Fail if score drops more than N points", parseInt, 10)
+    .option("--score-drop <n>", "Fail if score drops more than N points", int, 10)
     .option(
       "--token-threshold <n>",
       "Fail if token footprint increases more than N%",
-      parseInt,
+      int,
       20
     )
     .option("--allow-breaking", "Do not fail when tools or parameters are removed or changed incompatibly")
@@ -126,5 +135,35 @@ withConnectionOptions(
     run: runOptions(opts),
   });
 });
+
+program
+  .command("scan")
+  .description(
+    "Find the MCP servers configured for your AI clients and report their context cost, security findings and changes since the last scan"
+  )
+  .option("--project", "Also scan config files checked into the current directory. Starts the servers they define")
+  .option("--context-window <tokens>", "Context window size used for the percentage", int, 200000)
+  .option("--timeout <seconds>", "Seconds to wait for each server", parseFloat)
+  .option("--no-save", "Do not update the baseline used to detect changes")
+  .option("--list", "List the servers that would be scanned without starting them")
+  .option("--format <fmt>", "Output format: json")
+  .action((opts) => {
+    if (!(opts.contextWindow > 0)) {
+      console.error("error: --context-window must be a positive number of tokens.");
+      process.exit(1);
+    }
+    if (opts.timeout !== undefined && !(opts.timeout > 0)) {
+      console.error("error: --timeout must be a positive number of seconds.");
+      process.exit(1);
+    }
+    runScan({
+      includeProject: opts.project,
+      contextWindow: opts.contextWindow,
+      timeoutMs: opts.timeout !== undefined ? Math.round(opts.timeout * 1000) : undefined,
+      save: opts.save,
+      list: opts.list,
+      format: opts.format,
+    });
+  });
 
 program.parse();

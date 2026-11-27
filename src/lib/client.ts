@@ -7,7 +7,7 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { StdioClientTransport, getDefaultEnvironment } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { WebSocketClientTransport } from "@modelcontextprotocol/sdk/client/websocket.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { Target } from "./target.js";
@@ -73,6 +73,14 @@ async function withTimeout<T>(work: Promise<T>, ms: number): Promise<T> {
   }
 }
 
+function inheritedEnv(): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (value !== undefined) env[key] = value;
+  }
+  return env;
+}
+
 interface Connected {
   client: Client;
   transport: TransportKind;
@@ -103,6 +111,8 @@ async function connect(target: Target, opts: ConnectOptions): Promise<Connected>
     const transport = new StdioClientTransport({
       command: target.command,
       args: target.args,
+      env: target.env ? { ...getDefaultEnvironment(), ...target.env } : inheritedEnv(),
+      ...(target.cwd ? { cwd: target.cwd } : {}),
       stderr: "pipe",
     });
 
