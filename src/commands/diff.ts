@@ -1,6 +1,7 @@
 import ora from "ora";
 import chalk from "chalk";
-import { lintTarget, type RunOptions } from "../lib/run.js";
+import { analyzeTarget, type RunOptions } from "../lib/run.js";
+import { diffSchemas, type SchemaChange, type SchemaDiff } from "../lib/schema-diff.js";
 import { EXIT } from "../lib/exit-codes.js";
 
 const GRADE_ORDER = ["F", "D", "C", "B", "A"];
@@ -11,6 +12,7 @@ interface DiffOptions {
   tokenThreshold: number;
   scoreDrop: number;
   format?: "json";
+  allowBreaking?: boolean;
   run?: RunOptions;
 }
 
@@ -18,11 +20,11 @@ export async function runDiff(opts: DiffOptions): Promise<void> {
   const spinner =
     opts.format === "json" ? null : ora("Fetching base and head lint results…").start();
 
-  let base, head;
+  let baseAnalysis, headAnalysis;
   try {
-    [base, head] = await Promise.all([
-      lintTarget(opts.base, opts.run),
-      lintTarget(opts.head, opts.run),
+    [baseAnalysis, headAnalysis] = await Promise.all([
+      analyzeTarget(opts.base, opts.run),
+      analyzeTarget(opts.head, opts.run),
     ]);
   } catch (err) {
     spinner?.fail(chalk.red("Could not reach one or both servers"));
@@ -33,6 +35,10 @@ export async function runDiff(opts: DiffOptions): Promise<void> {
   }
 
   spinner?.stop();
+
+  const base = baseAnalysis.lint;
+  const head = headAnalysis.lint;
+  const schema = diffSchemas(baseAnalysis.inspect, headAnalysis.inspect);
 
   const gradeDrop =
     GRADE_ORDER.indexOf(head.grade) < GRADE_ORDER.indexOf(base.grade);
@@ -45,16 +51,18 @@ export async function runDiff(opts: DiffOptions): Promise<void> {
   if (opts.format === "json") {
     console.log(
       JSON.stringify(
-        { base, head, gradeDrop, scoreDiff, tokenIncreasePct },
+        { base, head, gradeDrop, scoreDiff, tokenIncreasePct, schema },
         null,
         2
       )
     );
   } else {
     printDiff({ base, head, gradeDrop, scoreDiff, tokenIncreasePct });
+    printSchemaDiff(schema, opts.allowBreaking === true);
   }
 
   const failed =
+    (schema.breaking.length > 0 && !opts.allowBreaking) ||
     gradeDrop ||
     scoreDiff > opts.scoreDrop ||
     tokenIncreasePct > opts.tokenThreshold;
@@ -103,4 +111,32 @@ function printDiff({
         );
   console.log(tokenLine);
   console.log();
+}
+
+function printSchemaDiff(schema: SchemaDiff, allowBreaking: boolean): void {
+  const line = (c: SchemaChange): string => `${c.category} "${c.target}" — ${c.message}`;
+
+  if (schema.breaking.length > 0) {
+    console.log(chalk.red.bold(`  BREAKING (${schema.breaking.length})`));
+    for (const c of schema.breaking) console.log(chalk.red(`  ✗ ${line(c)}`));
+    console.log();
+  }
+  if (schema.changed.length > 0) {
+    console.log(chalk.yellow.bold(`  CHANGED (${schema.changed.length})`));
+    for (const c of schema.changed) console.log(chalk.yellow(`  ~ ${line(c)}`));
+    console.log();
+  }
+  if (schema.added.length > 0) {
+    console.log(chalk.green.bold(`  ADDED (${schema.added.length})`));
+    for (const c of schema.added) console.log(chalk.green(`  + ${line(c)}`));
+    console.log();
+  }
+
+  if (schema.breaking.length === 0 && schema.changed.length === 0 && schema.added.length === 0) {
+    console.log(chalk.green("  Schema : no changes"));
+    console.log();
+  } else if (schema.breaking.length > 0 && allowBreaking) {
+    console.log(chalk.dim("  Breaking changes allowed by --allow-breaking."));
+    console.log();
+  }
 }

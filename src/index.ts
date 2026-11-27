@@ -113,6 +113,7 @@ withConnectionOptions(
       parseInt,
       20
     )
+    .option("--allow-breaking", "Do not fail when tools or parameters are removed or changed incompatibly")
     .option("--format <fmt>", "Output format: json")
 ).action((opts) => {
   runDiff({
@@ -121,6 +122,7 @@ withConnectionOptions(
     scoreDrop: opts.scoreDrop,
     tokenThreshold: opts.tokenThreshold,
     format: opts.format,
+    allowBreaking: opts.allowBreaking,
     run: runOptions(opts),
   });
 });

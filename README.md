@@ -154,7 +154,7 @@ Exits `0` if up, `1` if down, `2` if unreachable.
 
 ### `mcpx diff --base <target> --head <target>`
 
-Compare two MCP server versions. Fails CI if grade dropped, score dropped, or token footprint increased beyond thresholds.
+Compare two versions of an MCP server. Fails CI on a breaking schema change, a grade drop, or a score or token regression beyond the thresholds.
 
 ```bash
 mcpx diff --base https://mcp.example.com/mcp --head https://mcp-staging.example.com/mcp
@@ -168,7 +168,34 @@ Output:
   Grade  : A → B  ✖ dropped
   Score  : 95 → 82  (−13)
   Tokens : ~800 → ~1,240  (+55.0%)
+
+  BREAKING (2)
+  ✗ tool "get_weather" — New required parameter "units". Existing calls do not send it.
+  ✗ tool "add_numbers" — Tool was removed or renamed. Agents that call it will fail.
+
+  CHANGED (1)
+  ~ tool "search" — Tool description changed. Models pick tools by description, so selection behaviour can shift.
 ```
+
+Compare the server on your branch against production in a pull request:
+
+```bash
+mcpx diff --base https://mcp.example.com/mcp --head "node dist/server.js"
+```
+
+**What counts as breaking:**
+
+| Change | Result |
+|---|---|
+| Tool, resource or prompt removed or renamed | Breaking |
+| Parameter removed, or its type changed | Breaking |
+| New required parameter, or optional made required | Breaking |
+| Enum value removed, or free-form value restricted to an enum | Breaking |
+| Tool or parameter description reworded | Changed |
+| Enum value added, required made optional | Changed |
+| New tool, new optional parameter | Added |
+
+Only breaking changes fail the diff. `--format json` includes every change under `schema`.
 
 **Options:**
 
@@ -176,6 +203,7 @@ Output:
 |---|---|---|
 | `--score-drop <n>` | Fail if score drops more than N points | `10` |
 | `--token-threshold <n>` | Fail if token footprint increases more than N% | `20` |
+| `--allow-breaking` | Report breaking schema changes without failing | — |
 | `--format json` | Output raw JSON | — |
 
 ---
@@ -300,9 +328,24 @@ A server with zero tools, resources, and prompts automatically receives an F reg
 
 ---
 
+## Security checks
+
+`mcpx lint` also scans tool names, descriptions and parameter schemas for tool poisoning: text written for the model instead of the user.
+
+| Rule | Severity | Catches |
+|---|---|---|
+| `sec-prompt-injection` | Error | Instructions to ignore prior instructions, hide actions from the user, run before or instead of other tools, and instruction-style tags such as `<IMPORTANT>` |
+| `sec-hidden-characters` | Error | Zero-width, direction-override and Unicode tag characters |
+| `sec-sensitive-path` | Warning | References to SSH keys, cloud credentials, `.env` files and MCP client configuration |
+| `sec-hidden-padding` | Warning | Long runs of blank space that push text out of view |
+
+These are pattern checks for known techniques. A clean result does not prove a server is safe.
+
+---
+
 ## MCP Playground
 
-`mcpx` uses the same lint rules as [MCP Playground](https://mcpplayground.tech), and runs them locally. For a public server, the lint output links to the playground so you can explore the server in a browser.
+`mcpx` runs the [MCP Playground](https://mcpplayground.tech) schema rules locally, plus the security checks above. For a public server, the lint output links to the playground so you can explore the server in a browser.
 
 Pass `--remote` to run a check through the playground's hosted API instead of from your machine. That only works for public URLs and cannot send custom headers. API documentation: [mcpplayground.tech/docs/api](https://mcpplayground.tech/docs/api)
 

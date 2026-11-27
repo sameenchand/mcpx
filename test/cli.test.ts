@@ -81,6 +81,31 @@ describe("mcpx against a local stdio server", () => {
     expect(JSON.parse(worse.stdout).gradeDrop).toBe(true);
   });
 
+  it("fails a diff on breaking schema changes even when the grade holds", async () => {
+    const v2 = `node "${fixture}" v2`;
+    const run = await mcpx("diff", "--base", good, "--head", v2, "--format", "json");
+    expect(run.code).toBe(1);
+    const out = JSON.parse(run.stdout);
+    expect(out.gradeDrop).toBe(false);
+    expect(out.schema.breaking.map((c: { rule: string }) => c.rule).sort()).toEqual([
+      "param-added-required",
+      "tool-removed",
+    ]);
+
+    const text = await mcpx("diff", "--base", good, "--head", v2);
+    expect(text.stdout).toContain("BREAKING (2)");
+
+    const allowed = await mcpx("diff", "--base", good, "--head", v2, "--allow-breaking", "--token-threshold", "100");
+    expect(allowed.code).toBe(0);
+  });
+
+  it("fails the lint for a poisoned tool description", async () => {
+    const run = await mcpx("lint", `node "${fixture}" poisoned`, "--format", "json");
+    expect(run.code).toBe(1);
+    const rules = JSON.parse(run.stdout).issues.map((i: { rule: string }) => i.rule);
+    expect(rules).toEqual(expect.arrayContaining(["sec-prompt-injection", "sec-sensitive-path"]));
+  });
+
   it("exits 2 when the command cannot start", async () => {
     const run = await mcpx("lint", "definitely-not-a-real-binary-xyz", "--quiet");
     expect(run.code).toBe(2);

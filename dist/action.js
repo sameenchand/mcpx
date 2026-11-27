@@ -7869,6 +7869,9 @@ async function get(path, url2) {
 async function lint(url2) {
   return get("lint", url2);
 }
+async function inspect(url2) {
+  return get("inspect", url2);
+}
 
 // node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/core/util.js
 var util_exports = {};
@@ -20430,6 +20433,109 @@ async function inspectDirect(target, opts = {}) {
   }
 }
 
+// src/lib/security.ts
+var HIDDEN_CHARS = /[​-‏‪-‮⁠-⁤⁦-⁩﻿]|\uDB40[\uDC00-\uDC7F]/;
+var INSTRUCTION_PATTERNS = [
+  {
+    pattern: /\b(ignore|disregard|forget|override)\b[^.\n]{0,30}\b(previous|prior|above|earlier|all|other|system)\b[^.\n]{0,20}\b(instructions?|prompts?|rules|guidelines)\b/i,
+    what: "tells the model to ignore its instructions"
+  },
+  {
+    pattern: /\b(do not|don't|never|without)\s+(tell|telling|mention|mentioning|inform|informing|notify|notifying|reveal|revealing|alert|alerting|show|showing)\b[^.\n]{0,25}\b(the )?(user|human|operator)\b/i,
+    what: "tells the model to hide something from the user"
+  },
+  {
+    pattern: /<\s*\/?\s*(important|system|instructions?|secret|hidden|admin)\s*>/i,
+    what: "contains an instruction-style tag aimed at the model"
+  },
+  {
+    pattern: /\b(before|prior to)\s+(using|calling|invoking|running)\s+(any|all|every)\s+(other\s+)?tools?\b/i,
+    what: "tries to run ahead of every other tool"
+  },
+  {
+    pattern: /\binstead of\s+(using|calling|invoking)\s+(the\s+)?[\w-]+\s+tool\b/i,
+    what: "tries to replace another tool"
+  }
+];
+var SENSITIVE_PATHS = [
+  { pattern: /(~|\$HOME|\/home\/[\w.-]+|\/Users\/[\w.-]+)\/\.ssh\b|\bid_(rsa|ed25519|ecdsa)\b/i, what: "SSH keys" },
+  { pattern: /\.aws\/credentials\b/i, what: "AWS credentials" },
+  { pattern: /(^|[\s"'`/])\.env\b(?!\.example)/i, what: ".env files" },
+  { pattern: /\/etc\/(passwd|shadow)\b/i, what: "system account files" },
+  { pattern: /\.(cursor|claude|codeium|vscode)\/[\w./-]*mcp[\w.-]*\.json\b|claude_desktop_config\.json\b/i, what: "MCP client configuration" }
+];
+var PADDING = / {40,}|\t{10,}|(\r?\n[ \t]*){8,}/;
+function schemaStrings(node2, out = [], depth = 0) {
+  if (depth > 12 || node2 === null || node2 === void 0) return out;
+  if (typeof node2 === "string") {
+    out.push(node2);
+  } else if (Array.isArray(node2)) {
+    for (const item of node2) schemaStrings(item, out, depth + 1);
+  } else if (typeof node2 === "object") {
+    for (const [key, value] of Object.entries(node2)) {
+      out.push(key);
+      schemaStrings(value, out, depth + 1);
+    }
+  }
+  return out;
+}
+function checkText(texts, target, category) {
+  const findings = [];
+  const seen = /* @__PURE__ */ new Set();
+  const add = (severity, rule, message) => {
+    if (seen.has(rule)) return;
+    seen.add(rule);
+    findings.push({ target, category, severity, rule, message });
+  };
+  for (const text of texts) {
+    if (HIDDEN_CHARS.test(text)) {
+      add(
+        "error",
+        "sec-hidden-characters",
+        "Contains invisible or direction-changing Unicode characters. These can hide instructions from a human reviewer."
+      );
+    }
+    for (const { pattern, what } of INSTRUCTION_PATTERNS) {
+      if (pattern.test(text)) {
+        add("error", "sec-prompt-injection", `Metadata ${what}. This is a tool-poisoning pattern.`);
+      }
+    }
+    for (const { pattern, what } of SENSITIVE_PATHS) {
+      if (pattern.test(text)) {
+        add("warning", "sec-sensitive-path", `Metadata refers to ${what}. Check that the tool has a reason to mention them.`);
+      }
+    }
+    if (PADDING.test(text)) {
+      add(
+        "warning",
+        "sec-hidden-padding",
+        "Contains a long run of blank space, which can push text out of view in a client's approval dialog."
+      );
+    }
+  }
+  return findings;
+}
+function auditMetadata(result) {
+  const findings = [];
+  for (const tool of result.tools) {
+    const texts = [tool.name, tool.description ?? "", ...schemaStrings(tool.inputSchema)];
+    findings.push(...checkText(texts, tool.name, "tool"));
+  }
+  for (const resource of result.resources) {
+    const texts = [resource.uri, resource.name ?? "", resource.description ?? ""];
+    findings.push(...checkText(texts, resource.name ?? resource.uri, "resource"));
+  }
+  for (const prompt of result.prompts) {
+    const texts = [
+      prompt.name,
+      prompt.description ?? "",
+      ...(prompt.arguments ?? []).flatMap((a) => [a.name, a.description ?? ""])
+    ];
+    findings.push(...checkText(texts, prompt.name, "prompt"));
+  }
+  return findings;
+}
+
 // src/lib/linter.ts
 function estimateTokens(text) {
   return Math.ceil(text.length / 3.5);
@@ -20614,6 +20720,7 @@ function lintMcpServer(result) {
   for (const prompt of result.prompts) {
     issues.push(...lintPrompt(prompt));
   }
+  issues.push(...auditMetadata(result));
   const perTool = result.tools.map((tool) => ({
     name: tool.name,
     tokens: estimateToolTokens(tool)
@@ -20739,21 +20846,32 @@ function remoteUrl(input, opts) {
   }
   return target.url;
 }
-async function lintTarget(input, opts = {}) {
-  if (opts.remote) return lint(remoteUrl(input, opts));
+async function analyzeTarget(input, opts = {}) {
+  if (opts.remote) {
+    const url2 = remoteUrl(input, opts);
+    const [inspect2, lint2] = await Promise.all([inspect(url2), lint(url2)]);
+    return { inspect: inspect2, lint: lint2 };
+  }
   const inspected = await inspectDirect(parseTarget(input), opts);
   const report = lintMcpServer(inspected);
   return {
-    ok: true,
-    url: inspected.url,
-    server: inspected.serverInfo,
-    transport: inspected.transport,
-    grade: report.grade,
-    score: report.score,
-    tokenEstimate: report.tokenEstimate,
-    summary: report.summary,
-    issues: report.issues
+    inspect: inspected,
+    lint: {
+      ok: true,
+      url: inspected.url,
+      server: inspected.serverInfo,
+      transport: inspected.transport,
+      grade: report.grade,
+      score: report.score,
+      tokenEstimate: report.tokenEstimate,
+      summary: report.summary,
+      issues: report.issues
+    }
   };
+}
+async function lintTarget(input, opts = {}) {
+  if (opts.remote) return lint(remoteUrl(input, opts));
+  return (await analyzeTarget(input, opts)).lint;
 }
 
 // src/lib/exit-codes.ts

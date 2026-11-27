@@ -7,6 +7,7 @@
  */
 
 import type { InspectResult, ToolSchema, ResourceInfo, PromptInfo } from "./types.js";
+import { auditMetadata } from "./security.js";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -302,6 +303,9 @@ export function lintMcpServer(result: InspectResult): LintReport {
   for (const prompt of result.prompts) {
     issues.push(...lintPrompt(prompt));
   }
+
+  // Tool-poisoning checks on names, descriptions and schemas
+  issues.push(...auditMetadata(result));
 
   // Token estimate
   const perTool = result.tools.map((tool) => ({

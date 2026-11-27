@@ -32,22 +32,40 @@ export async function inspectTarget(input: string, opts: RunOptions = {}): Promi
   return inspectDirect(parseTarget(input), opts);
 }
 
-export async function lintTarget(input: string, opts: RunOptions = {}): Promise<LintResult> {
-  if (opts.remote) return api.lint(remoteUrl(input, opts));
+export interface Analysis {
+  inspect: InspectResult;
+  lint: LintResult;
+}
+
+/** Inspect and lint a target in one connection. */
+export async function analyzeTarget(input: string, opts: RunOptions = {}): Promise<Analysis> {
+  if (opts.remote) {
+    const url = remoteUrl(input, opts);
+    const [inspect, lint] = await Promise.all([api.inspect(url), api.lint(url)]);
+    return { inspect, lint };
+  }
 
   const inspected = await inspectDirect(parseTarget(input), opts);
   const report = lintMcpServer(inspected);
   return {
-    ok: true,
-    url: inspected.url,
-    server: inspected.serverInfo,
-    transport: inspected.transport,
-    grade: report.grade,
-    score: report.score,
-    tokenEstimate: report.tokenEstimate,
-    summary: report.summary,
-    issues: report.issues,
+    inspect: inspected,
+    lint: {
+      ok: true,
+      url: inspected.url,
+      server: inspected.serverInfo,
+      transport: inspected.transport,
+      grade: report.grade,
+      score: report.score,
+      tokenEstimate: report.tokenEstimate,
+      summary: report.summary,
+      issues: report.issues,
+    },
   };
+}
+
+export async function lintTarget(input: string, opts: RunOptions = {}): Promise<LintResult> {
+  if (opts.remote) return api.lint(remoteUrl(input, opts));
+  return (await analyzeTarget(input, opts)).lint;
 }
 
 export async function healthTarget(input: string, opts: RunOptions = {}): Promise<HealthResult> {

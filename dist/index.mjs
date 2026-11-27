@@ -245,6 +245,109 @@ async function healthDirect(target, opts = {}) {
   }
 }
 
+// src/lib/security.ts
+var HIDDEN_CHARS = /[​-‏‪-‮⁠-⁤⁦-⁩﻿]|\uDB40[\uDC00-\uDC7F]/;
+var INSTRUCTION_PATTERNS = [
+  {
+    pattern: /\b(ignore|disregard|forget|override)\b[^.\n]{0,30}\b(previous|prior|above|earlier|all|other|system)\b[^.\n]{0,20}\b(instructions?|prompts?|rules|guidelines)\b/i,
+    what: "tells the model to ignore its instructions"
+  },
+  {
+    pattern: /\b(do not|don't|never|without)\s+(tell|telling|mention|mentioning|inform|informing|notify|notifying|reveal|revealing|alert|alerting|show|showing)\b[^.\n]{0,25}\b(the )?(user|human|operator)\b/i,
+    what: "tells the model to hide something from the user"
+  },
+  {
+    pattern: /<\s*\/?\s*(important|system|instructions?|secret|hidden|admin)\s*>/i,
+    what: "contains an instruction-style tag aimed at the model"
+  },
+  {
+    pattern: /\b(before|prior to)\s+(using|calling|invoking|running)\s+(any|all|every)\s+(other\s+)?tools?\b/i,
+    what: "tries to run ahead of every other tool"
+  },
+  {
+    pattern: /\binstead of\s+(using|calling|invoking)\s+(the\s+)?[\w-]+\s+tool\b/i,
+    what: "tries to replace another tool"
+  }
+];
+var SENSITIVE_PATHS = [
+  { pattern: /(~|\$HOME|\/home\/[\w.-]+|\/Users\/[\w.-]+)\/\.ssh\b|\bid_(rsa|ed25519|ecdsa)\b/i, what: "SSH keys" },
+  { pattern: /\.aws\/credentials\b/i, what: "AWS credentials" },
+  { pattern: /(^|[\s"'`/])\.env\b(?!\.example)/i, what: ".env files" },
+  { pattern: /\/etc\/(passwd|shadow)\b/i, what: "system account files" },
+  { pattern: /\.(cursor|claude|codeium|vscode)\/[\w./-]*mcp[\w.-]*\.json\b|claude_desktop_config\.json\b/i, what: "MCP client configuration" }
+];
+var PADDING = / {40,}|\t{10,}|(\r?\n[ \t]*){8,}/;
+function schemaStrings(node, out = [], depth = 0) {
+  if (depth > 12 || node === null || node === void 0) return out;
+  if (typeof node === "string") {
+    out.push(node);
+  } else if (Array.isArray(node)) {
+    for (const item of node) schemaStrings(item, out, depth + 1);
+  } else if (typeof node === "object") {
+    for (const [key, value] of Object.entries(node)) {
+      out.push(key);
+      schemaStrings(value, out, depth + 1);
+    }
+  }
+  return out;
+}
+function checkText(texts, target, category) {
+  const findings = [];
+  const seen = /* @__PURE__ */ new Set();
+  const add = (severity, rule, message) => {
+    if (seen.has(rule)) return;
+    seen.add(rule);
+    findings.push({ target, category, severity, rule, message });
+  };
+  for (const text of texts) {
+    if (HIDDEN_CHARS.test(text)) {
+      add(
+        "error",
+        "sec-hidden-characters",
+        "Contains invisible or direction-changing Unicode characters. These can hide instructions from a human reviewer."
+      );
+    }
+    for (const { pattern, what } of INSTRUCTION_PATTERNS) {
+      if (pattern.test(text)) {
+        add("error", "sec-prompt-injection", `Metadata ${what}. This is a tool-poisoning pattern.`);
+      }
+    }
+    for (const { pattern, what } of SENSITIVE_PATHS) {
+      if (pattern.test(text)) {
+        add("warning", "sec-sensitive-path", `Metadata refers to ${what}. Check that the tool has a reason to mention them.`);
+      }
+    }
+    if (PADDING.test(text)) {
+      add(
+        "warning",
+        "sec-hidden-padding",
+        "Contains a long run of blank space, which can push text out of view in a client's approval dialog."
+      );
+    }
+  }
+  return findings;
+}
+function auditMetadata(result) {
+  const findings = [];
+  for (const tool of result.tools) {
+    const texts = [tool.name, tool.description ?? "", ...schemaStrings(tool.inputSchema)];
+    findings.push(...checkText(texts, tool.name, "tool"));
+  }
+  for (const resource of result.resources) {
+    const texts = [resource.uri, resource.name ?? "", resource.description ?? ""];
+    findings.push(...checkText(texts, resource.name ?? resource.uri, "resource"));
+  }
+  for (const prompt of result.prompts) {
+    const texts = [
+      prompt.name,
+      prompt.description ?? "",
+      ...(prompt.arguments ?? []).flatMap((a) => [a.name, a.description ?? ""])
+    ];
+    findings.push(...checkText(texts, prompt.name, "prompt"));
+  }
+  return findings;
+}
+
 // src/lib/linter.ts
 function estimateTokens(text) {
   return Math.ceil(text.length / 3.5);
@@ -283,7 +386,7 @@ function lintTool(tool) {
     issues.push(t("tool-no-schema", "warning", "Missing inputSchema. Clients won't know what arguments to send."));
   } else {
     const properties = schema.properties;
-    const required = schema.required;
+    const required2 = schema.required;
     if (schema.type !== "object") {
       issues.push(t("tool-schema-not-object", "info", `inputSchema type is "${String(schema.type)}" instead of "object". Most clients expect an object at the top level.`));
     }
@@ -299,11 +402,11 @@ function lintTool(tool) {
           issues.push(t("prop-no-type", "warning", `Property "${propName}" has no type defined. Add a type (string, number, boolean, etc.).`));
         }
       }
-      if (propNames.length > 0 && (!required || !Array.isArray(required) || required.length === 0)) {
+      if (propNames.length > 0 && (!required2 || !Array.isArray(required2) || required2.length === 0)) {
         issues.push(t("tool-no-required", "info", "No required properties defined. Consider marking essential parameters as required."));
       }
-      if (required && Array.isArray(required)) {
-        for (const req of required) {
+      if (required2 && Array.isArray(required2)) {
+        for (const req of required2) {
           if (!propNames.includes(req)) {
             issues.push(t("required-not-in-properties", "error", `"${req}" is listed as required but doesn't exist in properties.`));
           }
@@ -429,6 +532,7 @@ function lintMcpServer(result) {
   for (const prompt of result.prompts) {
     issues.push(...lintPrompt(prompt));
   }
+  issues.push(...auditMetadata(result));
   const perTool = result.tools.map((tool) => ({
     name: tool.name,
     tokens: estimateToolTokens(tool)
@@ -567,21 +671,32 @@ async function inspectTarget(input, opts = {}) {
   if (opts.remote) return inspect(remoteUrl(input, opts));
   return inspectDirect(parseTarget(input), opts);
 }
-async function lintTarget(input, opts = {}) {
-  if (opts.remote) return lint(remoteUrl(input, opts));
+async function analyzeTarget(input, opts = {}) {
+  if (opts.remote) {
+    const url = remoteUrl(input, opts);
+    const [inspect2, lint2] = await Promise.all([inspect(url), lint(url)]);
+    return { inspect: inspect2, lint: lint2 };
+  }
   const inspected = await inspectDirect(parseTarget(input), opts);
   const report = lintMcpServer(inspected);
   return {
-    ok: true,
-    url: inspected.url,
-    server: inspected.serverInfo,
-    transport: inspected.transport,
-    grade: report.grade,
-    score: report.score,
-    tokenEstimate: report.tokenEstimate,
-    summary: report.summary,
-    issues: report.issues
+    inspect: inspected,
+    lint: {
+      ok: true,
+      url: inspected.url,
+      server: inspected.serverInfo,
+      transport: inspected.transport,
+      grade: report.grade,
+      score: report.score,
+      tokenEstimate: report.tokenEstimate,
+      summary: report.summary,
+      issues: report.issues
+    }
   };
+}
+async function lintTarget(input, opts = {}) {
+  if (opts.remote) return lint(remoteUrl(input, opts));
+  return (await analyzeTarget(input, opts)).lint;
 }
 async function healthTarget(input, opts = {}) {
   if (opts.remote) return health(remoteUrl(input, opts));
@@ -841,14 +956,199 @@ async function runHealth(url, opts) {
 // src/commands/diff.ts
 import ora4 from "ora";
 import chalk5 from "chalk";
+
+// src/lib/schema-diff.ts
+function props(schema) {
+  const p = schema?.properties;
+  return p && typeof p === "object" ? p : {};
+}
+function required(schema) {
+  const r = schema?.required;
+  return Array.isArray(r) ? r.filter((x) => typeof x === "string") : [];
+}
+function typeLabel(prop) {
+  if (!prop) return "unspecified";
+  const t = prop.type;
+  if (typeof t === "string") return t;
+  if (Array.isArray(t)) return [...t].map(String).sort().join(" | ");
+  if (Array.isArray(prop.enum)) return "enum";
+  for (const key of ["oneOf", "anyOf", "allOf", "$ref"]) {
+    if (prop[key] !== void 0) return key;
+  }
+  return "unspecified";
+}
+function enumValues(prop) {
+  return Array.isArray(prop?.enum) ? prop.enum.map((v) => JSON.stringify(v)) : void 0;
+}
+function diffTool(base, head) {
+  const out = [];
+  const change = (kind, rule, message) => {
+    out.push({ kind, rule, category: "tool", target: base.name, message });
+  };
+  const baseProps = props(base.inputSchema);
+  const headProps = props(head.inputSchema);
+  const baseReq = new Set(required(base.inputSchema));
+  const headReq = new Set(required(head.inputSchema));
+  for (const name of Object.keys(baseProps)) {
+    if (!(name in headProps)) {
+      change("breaking", "param-removed", `Parameter "${name}" was removed. Calls that still send it may be rejected.`);
+      continue;
+    }
+    const before = typeLabel(baseProps[name]);
+    const after = typeLabel(headProps[name]);
+    if (before !== after) {
+      change("breaking", "param-type-changed", `Parameter "${name}" changed type from ${before} to ${after}.`);
+    }
+    const beforeEnum = enumValues(baseProps[name]);
+    const afterEnum = enumValues(headProps[name]);
+    if (afterEnum) {
+      if (!beforeEnum) {
+        if (before === after) {
+          change("breaking", "param-enum-added", `Parameter "${name}" is now restricted to a fixed set of values.`);
+        }
+      } else {
+        const removed = beforeEnum.filter((v) => !afterEnum.includes(v));
+        const added = afterEnum.filter((v) => !beforeEnum.includes(v));
+        if (removed.length > 0) {
+          change("breaking", "param-enum-value-removed", `Parameter "${name}" no longer accepts ${removed.join(", ")}.`);
+        }
+        if (added.length > 0) {
+          change("changed", "param-enum-value-added", `Parameter "${name}" now also accepts ${added.join(", ")}.`);
+        }
+      }
+    }
+    if (!baseReq.has(name) && headReq.has(name)) {
+      change("breaking", "param-now-required", `Parameter "${name}" was optional and is now required.`);
+    } else if (baseReq.has(name) && !headReq.has(name)) {
+      change("changed", "param-now-optional", `Parameter "${name}" was required and is now optional.`);
+    }
+    if ((baseProps[name]?.description ?? "") !== (headProps[name]?.description ?? "")) {
+      change("changed", "param-description-changed", `Description of parameter "${name}" changed.`);
+    }
+  }
+  for (const name of Object.keys(headProps)) {
+    if (name in baseProps) continue;
+    if (headReq.has(name)) {
+      change("breaking", "param-added-required", `New required parameter "${name}". Existing calls do not send it.`);
+    } else {
+      change("added", "param-added-optional", `New optional parameter "${name}".`);
+    }
+  }
+  if ((base.description ?? "") !== (head.description ?? "")) {
+    change(
+      "changed",
+      "tool-description-changed",
+      "Tool description changed. Models pick tools by description, so selection behaviour can shift."
+    );
+  }
+  return out;
+}
+function diffPrompt(base, head) {
+  const out = [];
+  const change = (kind, rule, message) => {
+    out.push({ kind, rule, category: "prompt", target: base.name, message });
+  };
+  const baseArgs = new Map((base.arguments ?? []).map((a) => [a.name, a]));
+  const headArgs = new Map((head.arguments ?? []).map((a) => [a.name, a]));
+  for (const [name, arg] of baseArgs) {
+    const next = headArgs.get(name);
+    if (!next) {
+      change("breaking", "prompt-arg-removed", `Argument "${name}" was removed.`);
+    } else if (!arg.required && next.required) {
+      change("breaking", "prompt-arg-now-required", `Argument "${name}" was optional and is now required.`);
+    }
+  }
+  for (const [name, arg] of headArgs) {
+    if (baseArgs.has(name)) continue;
+    if (arg.required) {
+      change("breaking", "prompt-arg-added-required", `New required argument "${name}".`);
+    } else {
+      change("added", "prompt-arg-added-optional", `New optional argument "${name}".`);
+    }
+  }
+  if ((base.description ?? "") !== (head.description ?? "")) {
+    change("changed", "prompt-description-changed", "Prompt description changed.");
+  }
+  return out;
+}
+function diffSchemas(base, head) {
+  const all = [];
+  const baseTools = new Map(base.tools.map((t) => [t.name, t]));
+  const headTools = new Map(head.tools.map((t) => [t.name, t]));
+  for (const [name, tool] of baseTools) {
+    const next = headTools.get(name);
+    if (!next) {
+      all.push({
+        kind: "breaking",
+        rule: "tool-removed",
+        category: "tool",
+        target: name,
+        message: "Tool was removed or renamed. Agents that call it will fail."
+      });
+    } else {
+      all.push(...diffTool(tool, next));
+    }
+  }
+  for (const name of headTools.keys()) {
+    if (!baseTools.has(name)) {
+      all.push({ kind: "added", rule: "tool-added", category: "tool", target: name, message: "New tool." });
+    }
+  }
+  const baseResources = new Set(base.resources.map((r) => r.uri));
+  const headResources = new Set(head.resources.map((r) => r.uri));
+  for (const uri of baseResources) {
+    if (!headResources.has(uri)) {
+      all.push({
+        kind: "breaking",
+        rule: "resource-removed",
+        category: "resource",
+        target: uri,
+        message: "Resource was removed or its URI changed."
+      });
+    }
+  }
+  for (const uri of headResources) {
+    if (!baseResources.has(uri)) {
+      all.push({ kind: "added", rule: "resource-added", category: "resource", target: uri, message: "New resource." });
+    }
+  }
+  const basePrompts = new Map(base.prompts.map((p) => [p.name, p]));
+  const headPrompts = new Map(head.prompts.map((p) => [p.name, p]));
+  for (const [name, prompt] of basePrompts) {
+    const next = headPrompts.get(name);
+    if (!next) {
+      all.push({
+        kind: "breaking",
+        rule: "prompt-removed",
+        category: "prompt",
+        target: name,
+        message: "Prompt was removed or renamed."
+      });
+    } else {
+      all.push(...diffPrompt(prompt, next));
+    }
+  }
+  for (const name of headPrompts.keys()) {
+    if (!basePrompts.has(name)) {
+      all.push({ kind: "added", rule: "prompt-added", category: "prompt", target: name, message: "New prompt." });
+    }
+  }
+  return {
+    breaking: all.filter((c) => c.kind === "breaking"),
+    changed: all.filter((c) => c.kind === "changed"),
+    added: all.filter((c) => c.kind === "added")
+  };
+}
+
+// src/commands/diff.ts
 var GRADE_ORDER3 = ["F", "D", "C", "B", "A"];
 async function runDiff(opts) {
   const spinner = opts.format === "json" ? null : ora4("Fetching base and head lint results\u2026").start();
-  let base, head;
+  let baseAnalysis, headAnalysis;
   try {
-    [base, head] = await Promise.all([
-      lintTarget(opts.base, opts.run),
-      lintTarget(opts.head, opts.run)
+    [baseAnalysis, headAnalysis] = await Promise.all([
+      analyzeTarget(opts.base, opts.run),
+      analyzeTarget(opts.head, opts.run)
     ]);
   } catch (err) {
     spinner?.fail(chalk5.red("Could not reach one or both servers"));
@@ -858,21 +1158,25 @@ async function runDiff(opts) {
     process.exit(EXIT.ERROR);
   }
   spinner?.stop();
+  const base = baseAnalysis.lint;
+  const head = headAnalysis.lint;
+  const schema = diffSchemas(baseAnalysis.inspect, headAnalysis.inspect);
   const gradeDrop = GRADE_ORDER3.indexOf(head.grade) < GRADE_ORDER3.indexOf(base.grade);
   const scoreDiff = base.score - head.score;
   const tokenIncreasePct = base.tokenEstimate.total > 0 ? (head.tokenEstimate.total - base.tokenEstimate.total) / base.tokenEstimate.total * 100 : 0;
   if (opts.format === "json") {
     console.log(
       JSON.stringify(
-        { base, head, gradeDrop, scoreDiff, tokenIncreasePct },
+        { base, head, gradeDrop, scoreDiff, tokenIncreasePct, schema },
         null,
         2
       )
     );
   } else {
     printDiff({ base, head, gradeDrop, scoreDiff, tokenIncreasePct });
+    printSchemaDiff(schema, opts.allowBreaking === true);
   }
-  const failed = gradeDrop || scoreDiff > opts.scoreDrop || tokenIncreasePct > opts.tokenThreshold;
+  const failed = schema.breaking.length > 0 && !opts.allowBreaking || gradeDrop || scoreDiff > opts.scoreDrop || tokenIncreasePct > opts.tokenThreshold;
   process.exit(failed ? EXIT.FAIL : EXIT.PASS);
 }
 function printDiff({
@@ -897,6 +1201,31 @@ function printDiff({
   );
   console.log(tokenLine);
   console.log();
+}
+function printSchemaDiff(schema, allowBreaking) {
+  const line = (c) => `${c.category} "${c.target}" \u2014 ${c.message}`;
+  if (schema.breaking.length > 0) {
+    console.log(chalk5.red.bold(`  BREAKING (${schema.breaking.length})`));
+    for (const c of schema.breaking) console.log(chalk5.red(`  \u2717 ${line(c)}`));
+    console.log();
+  }
+  if (schema.changed.length > 0) {
+    console.log(chalk5.yellow.bold(`  CHANGED (${schema.changed.length})`));
+    for (const c of schema.changed) console.log(chalk5.yellow(`  ~ ${line(c)}`));
+    console.log();
+  }
+  if (schema.added.length > 0) {
+    console.log(chalk5.green.bold(`  ADDED (${schema.added.length})`));
+    for (const c of schema.added) console.log(chalk5.green(`  + ${line(c)}`));
+    console.log();
+  }
+  if (schema.breaking.length === 0 && schema.changed.length === 0 && schema.added.length === 0) {
+    console.log(chalk5.green("  Schema : no changes"));
+    console.log();
+  } else if (schema.breaking.length > 0 && allowBreaking) {
+    console.log(chalk5.dim("  Breaking changes allowed by --allow-breaking."));
+    console.log();
+  }
 }
 
 // src/index.ts
@@ -971,7 +1300,7 @@ withConnectionOptions(
     "Fail if token footprint increases more than N%",
     parseInt,
     20
-  ).option("--format <fmt>", "Output format: json")
+  ).option("--allow-breaking", "Do not fail when tools or parameters are removed or changed incompatibly").option("--format <fmt>", "Output format: json")
 ).action((opts) => {
   runDiff({
     base: opts.base,
@@ -979,6 +1308,7 @@ withConnectionOptions(
     scoreDrop: opts.scoreDrop,
     tokenThreshold: opts.tokenThreshold,
     format: opts.format,
+    allowBreaking: opts.allowBreaking,
     run: runOptions(opts)
   });
 });
